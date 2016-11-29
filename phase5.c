@@ -1,11 +1,19 @@
-/*
- * skeleton.c
- *
- * This is a skeleton for phase5 of the programming assignment. It
- * doesn't do much -- it is just intended to get you started.
- */
+/*======================================================================
+|  USLOSS Project - Phase 5 : phase5.c
++-----------------------------------------------------------------------
+|  Author:      Steven Eiselen | Breelan Lubers
+|  Language:    C utilizing USLOSS
+|  Class:       CSC 452 Fall 2016
+|  Instructor:  Patrick Homer
+|  Purpose:     Implements Phase 5
++-----------------------------------------------------------------------
+TEMPORARY NOTES:
+
+> Fault Table 'faults' can only have one page fault at a time, so we can
+  allocate the messages statically and index them by PID
 
 
+*=====================================================================*/
 #include <assert.h>
 #include <phase1.h>
 #include <phase2.h>
@@ -17,6 +25,10 @@
 #include <vm.h>
 #include <string.h>
 
+
+//######################################################################
+//>>> These are needed to work with libpatrickphase4.a
+//######################################################################
 extern void mbox_create(systemArgs *args_ptr);
 extern void mbox_release(systemArgs *args_ptr);
 extern void mbox_send(systemArgs *args_ptr);
@@ -24,31 +36,45 @@ extern void mbox_receive(systemArgs *args_ptr);
 extern void mbox_condsend(systemArgs *args_ptr);
 extern void mbox_condreceive(systemArgs *args_ptr);
 
-static Process processes[MAXPROC];
 
-FaultMsg faults[MAXPROC]; /* Note that a process can have only
-                           * one fault at a time, so we can
-                           * allocate the messages statically
-                           * and index them by pid. */
-VmStats  vmStats;
-int vmInitialized;  // value of 1 means the VM already been initialized
+//######################################################################
+//>>> Global Variables
+//######################################################################
 
-// global variables for pager daemon ID's
+// Data Structures _____________________________________________________
+static Process processes[MAXPROC]; // Phase 5 Process Table
+FaultMsg       faults[MAXPROC];    // Fault Info Table, FaultMsg defined in vm.h
+VmStats        vmStats;            // Stats for VM System, VmStats defined in vm.h 
+void           *vmRegion;          // Contains start address of Virtual Memory Frames
+
+// Flags/Triggers ______________________________________________________
+extern int VM_INIT; // Informs p1.c functions if VmInit has completed
+int vmInitialized;  // Bree's VM_INIT - keeping here until successful refactor
+
+// VM System Settings (Assigned Via VmInit) ____________________________
+int NUM_PAGES;      // Number of Pages
+int NUM_MAPPINGS;   // Number of Mappings
+int NUM_FRAMES;     // Number of Frames
+int NUM_PAGERS;     // Number of Pager Daemons
+
+// Pager Daemon PIDs ___________________________________________________
 int pager0ID;
 int pager1ID;
 int pager2ID;
 int pager3ID;
 
 
-// local function declarations
-static void 
-FaultHandler(int  type,  // USLOSS_MMU_INT
-             void *arg); // Offset within VM region
+/*######################################################################
+//>>> Local Function Declarations
+######################################################################*/
+static void FaultHandler(int  type, void *arg); // Interrupt Handler, installed in MMU_Int
+static void vmInit(systemArgs *sysargsPtr);     // Syscall Handler, installed in systemCallVec
+void        *vmInitReal(int mappings, int pages, int frames, int pagers);
+static void vmDestroy(systemArgs *sysargsPtr);  // Syscall Handler, instslled in systemCallVec
+void        PrintStats(void);
 
-static void vmInit(systemArgs *sysargsPtr);
-static void vmDestroy(systemArgs *sysargsPtr);
-void *vmInitReal(int mappings, int pages, int frames, int pagers);
-void PrintStats(void);
+
+
 /*
  *----------------------------------------------------------------------
  *
