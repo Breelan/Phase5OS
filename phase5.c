@@ -48,8 +48,7 @@ VmStats        vmStats;            // Stats for VM System, VmStats defined in vm
 void           *vmRegion;          // Contains start address of Virtual Memory Frames
 
 // Flags/Triggers ______________________________________________________
-extern int VM_INIT; // Informs p1.c functions if VmInit has completed
-int vmInitialized;  // Bree's VM_INIT - keeping here until successful refactor
+int VM_INIT; // Informs p1.c functions if VmInit has completed
 
 // VM System Settings (Assigned Via VmInit) ____________________________
 int NUM_PAGES;      // Number of Pages
@@ -97,7 +96,7 @@ int start4(char *arg) {
     int status;
 
     // indicate that VM has not been initialized yet
-    vmInitialized = 0;
+    VM_INIT = 0;
 
     // initialize pager daemon ID's to NULL
     pager0ID = 0;
@@ -172,7 +171,7 @@ vmInit(systemArgs *sysargsPtr)
     }
 
     // check if VM region has already been initialized
-    if(vmInitialized == 1) {
+    if(VM_INIT == 1) {
       USLOSS_Console("vm region already initialized!\n");
       sysargsPtr->arg4 = (void *)((long) -2);
       return;
