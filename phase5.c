@@ -46,6 +46,8 @@ static Process processes[MAXPROC]; // Phase 5 Process Table
 FaultMsg       faults[MAXPROC];    // Fault Info Table, FaultMsg defined in vm.h
 VmStats        vmStats;            // Stats for VM System, VmStats defined in vm.h 
 void           *vmRegion;          // Contains start address of Virtual Memory Frames
+int *          DiskTable;          // Current state of Disk 1
+int            FaultMailbox;       // Fault Mailbox used by FaultHandler and Pagers
 
 // Flags/Triggers ______________________________________________________
 int VM_INIT; // Informs p1.c functions if VmInit has completed
@@ -115,6 +117,18 @@ int start4(char *arg) {
     /* user-process access to VM functions */
     systemCallVec[SYS_VMINIT]    = vmInit;
     systemCallVec[SYS_VMDESTROY] = vmDestroy;
+
+    /* initialize the Disk Table */
+
+    // get information about disk1
+    int numSectors;
+    int numTracks;
+    int diskSize;
+
+    DiskSize(1, &numSectors, &numTracks, &diskSize);
+
+    // allocate memory for DiskTable
+    DiskTable = (int *)malloc(numTracks * numSectors * sizeof(int));
 
     result = Spawn("Start5", start5, NULL, 8*USLOSS_MIN_STACK, PAGER_PRIORITY, &pid);
     if (result != 0) {
@@ -243,11 +257,12 @@ vmInitReal(int mappings, int pages, int frames, int pagers)
    int pid;
 
    CheckMode();
-   status = USLOSS_MmuInit(mappings, pages, frames);
-   if (status != USLOSS_MMU_OK) {
-      USLOSS_Console("vmInitReal: couldn't init MMU, status %d\n", status);
-      abort();
-   }
+   // THE FOLLOWING CAME WITH SKELETON
+   // status = USLOSS_MmuInit(mappings, pages, frames);
+   // if (status != USLOSS_MMU_OK) {
+   //    USLOSS_Console("vmInitReal: couldn't init MMU, status %d\n", status);
+   //    abort();
+   // }
 
    // install fault handler
    USLOSS_IntVec[USLOSS_MMU_INT] = FaultHandler;
@@ -258,9 +273,11 @@ vmInitReal(int mappings, int pages, int frames, int pagers)
     */
 
 
+
    /* 
     * Create the fault mailbox.
     */
+    FaultMailbox = MboxCreate(pagers, MAX_MESSAGE);
 
 
    /*
@@ -269,15 +286,27 @@ vmInitReal(int mappings, int pages, int frames, int pagers)
     // for(int i = 0; i < pagers; i++) {
     //   if(i == 0) {
     //     pager0ID = fork1("pager0", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
+           // block on mailbox
+           // char buf[MAX_MESSAGE];
+           // MboxReceive(FaultMailbox, buf, MAX_MESSAGE);
     //   }
     //   if(i == 1) {
     //     pager1ID = fork1("pager1", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
+           // block on mailbox
+           // char buf[MAX_MESSAGE];
+           // MboxReceive(FaultMailbox, buf, MAX_MESSAGE);
     //   }
     //   if(i == 2) {
     //     pager2ID = fork1("pager2", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
+           // block on mailbox
+           // char buf[MAX_MESSAGE];
+           // MboxReceive(FaultMailbox, buf, MAX_MESSAGE);    
     //   }
     //   if(i == 3) {
     //     pager3ID = fork1("pager3", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
+           // block on mailbox
+           // char buf[MAX_MESSAGE];
+           // MboxReceive(FaultMailbox, buf, MAX_MESSAGE);    
     //   }      
     // }
 
@@ -309,11 +338,14 @@ vmInitReal(int mappings, int pages, int frames, int pagers)
    status = USLOSS_MmuInit(10, 10, 10);
 
    // check if there is an error
-   USLOSS_Console("status from MmuInit is %d\n", status);
+   if (status != USLOSS_MMU_OK) {
+      USLOSS_Console("vmInitReal: couldn't init MMU, status %d\n", status);
+      abort();
+   }
 
    // set up a mapping in the MMU
    // QUESTION is protection (3rd arg) same as page state?
-   status = USLOSS_MmuMap(TAG, 0, 0, 500);
+   status = USLOSS_MmuMap(TAG, 0, 0, UNUSED);
    USLOSS_Console("status from MmuMap is %d\n", status);
 
    // print vmStats
