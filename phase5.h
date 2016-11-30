@@ -13,8 +13,7 @@
 #include <phase1.h>
 #include <phase2.h>
 
-extern int VM_INIT; // Informs p1.c functions if VmInit has completed
-
+extern int     VM_INIT; 
 
 /*
  * Pager priority.

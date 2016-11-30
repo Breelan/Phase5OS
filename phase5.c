@@ -7,13 +7,14 @@
 |  Instructor:  Patrick Homer
 |  Purpose:     Implements Phase 5
 +-----------------------------------------------------------------------
-TEMPORARY NOTES:
+ >>>>>>>>>>>>>>>>>>>> OPERATION TOTALITY UNISPHERE <<<<<<<<<<<<<<<<<<<<
 
-> Fault Table 'faults' can only have one page fault at a time, so we can
-  allocate the messages statically and index them by PID
+Notes:
+
+ > XTODO: Relocate function definitions to Phase5.h before turnin
 
 
-*=====================================================================*/
++=====================================================================*/
 #include <assert.h>
 #include <phase1.h>
 #include <phase2.h>
@@ -25,10 +26,9 @@ TEMPORARY NOTES:
 #include <vm.h>
 #include <string.h>
 
-
-//######################################################################
-//>>> These are needed to work with libpatrickphase4.a
-//######################################################################
+/*----------------------------------------------------------------------
+|>>> These are needed to work with libpatrickphase4.a
++---------------------------------------------------------------------*/
 extern void mbox_create(systemArgs *args_ptr);
 extern void mbox_release(systemArgs *args_ptr);
 extern void mbox_send(systemArgs *args_ptr);
@@ -36,87 +36,123 @@ extern void mbox_receive(systemArgs *args_ptr);
 extern void mbox_condsend(systemArgs *args_ptr);
 extern void mbox_condreceive(systemArgs *args_ptr);
 
-
-//######################################################################
-//>>> Global Variables
-//######################################################################
+/*----------------------------------------------------------------------
+|>>> Data Structure / Variable / ID Definitions
++-----------------------------------------------------------------------
+| Implementation Notes:
+|
+| > FaultMsg faults: Via Dr. Homer - "Processes can only have one page
+|                    fault at a time, so we can allocate the messages 
+|                    statically and index them by PID." Furthermore, we
+|                    will exploit this data structure to use as storage
+|                    for the private mailboxes that processes will wait
+|                    on whenever they execute a MMU Interrupt and block
+|                    pending completion of a Pager action via a message
+|
+| > void *vmRegion:  Dr. Homer recommended that we define the vmRegion
+|                    in this file, so that's what we'll do.
+|
+| > int pagerID:     The maximum number of Pager Daemons is defined by
+|                    USLOSS, ergo we can safely declare an array of such
+|                    size with the guarantee thereof. NUM_PAGERS defines
+|                    the number of Pager Daemons as passed in by call of
+|                    VmInit, and will be used to indicate how many Pager
+|                    Daemons the system uses, which can be <MAXPAGERS
+|
+----------------------------------------------------------------------*/
 
 // Data Structures _____________________________________________________
 static Process processes[MAXPROC]; // Phase 5 Process Table
-FaultMsg       faults[MAXPROC];    // Fault Info Table, FaultMsg defined in vm.h
-VmStats        vmStats;            // Stats for VM System, VmStats defined in vm.h 
-void           *vmRegion;          // Contains start address of Virtual Memory Frames
-int *          DiskTable;          // Current state of Disk 1
-int            FaultMailbox;       // Fault Mailbox used by FaultHandler and Pagers
+FaultMsg       faults[MAXPROC];    // Fault Info Table, defined in vm.h
+VmStats        vmStats;            // VM system stats, defined in vm.h 
+void           *vmRegion;          // Start address of Virtual Memory
 
-// Flags/Triggers ______________________________________________________
-int VM_INIT; // Informs p1.c functions if VmInit has completed
+// Pager PIDs / Pager Mailbox IDs ______________________________________
+int            pagerID[MAXPAGERS]; // Pager Daemon PIDS, max is defined
+int            pagerBox;           // Mailbox ID that Pagers wait on
 
 // VM System Settings (Assigned Via VmInit) ____________________________
-int NUM_PAGES;      // Number of Pages
-int NUM_MAPPINGS;   // Number of Mappings
-int NUM_FRAMES;     // Number of Frames
-int NUM_PAGERS;     // Number of Pager Daemons
+int            NUM_PAGES;          // Number of Pages
+int            NUM_MAPPINGS;       // Number of Mappings
+int            NUM_FRAMES;         // Number of Frames
+int            NUM_PAGERS;         // Number of Pager Daemons
 
-// Pager Daemon PIDs ___________________________________________________
-int pager0ID;
-int pager1ID;
-int pager2ID;
-int pager3ID;
+// Misc. / 'In a Rush' Added ___________________________________________
+int *          DiskTable;          // Current state of Disk 1
+int            VM_INIT;            // Informs if VmInit has completed
 
 
-/*######################################################################
-//>>> Local Function Declarations
-######################################################################*/
-static void FaultHandler(int  type, void *arg); // Interrupt Handler, installed in MMU_Int
-static void vmInit(systemArgs *sysargsPtr);     // Syscall Handler, installed in systemCallVec
+/*----------------------------------------------------------------------
+|>>> Interrupt and Syscall Declarations
++-----------------------------------------------------------------------
+| Implementation Notes:
+|
+| > FaultHandler is installed into the USLOSS_IntVec via VmInitReal
+| > vmInit is installed into the Syscall Vector via start4
+| > vmDestroy is installed into the Syscall Vector via start4
++---------------------------------------------------------------------*/
+static void FaultHandler(int  type, void *arg); // MMU Interrupt Handler
+static void vmInit(systemArgs *sysargsPtr);     // Syscall Handler
 void        *vmInitReal(int mappings, int pages, int frames, int pagers);
-static void vmDestroy(systemArgs *sysargsPtr);  // Syscall Handler, instslled in systemCallVec
-void        PrintStats(void);
+static void vmDestroy(systemArgs *sysargsPtr);  // Syscall Handler
+
+
+/*----------------------------------------------------------------------
+|>>> Util Function and Process Declarations
++-----------------------------------------------------------------------
+| Implementation Notes:
+|
+| > x
++---------------------------------------------------------------------*/
+void        PrintStats(void); // Prints the VmStats Struct Attributes
+static int  Pager(char *buf); // Implements the Pager Process
+void        clockAlgo();      // Placeholder for the Clock Algorithm
 
 
 
-/*
- *----------------------------------------------------------------------
- *
- * start4 --
- *
- * Initializes the VM system call handlers. 
- *
- * Results:
- *      MMU return status
- *
- * Side effects:
- *      The MMU is initialized.
- *
- *----------------------------------------------------------------------
- */
+
+
+
+
+
+/*----------------------------------------------------------------------
+|>>> Function start4
++-----------------------------------------------------------------------
+|
+| Purpose: > Initializes the VM system call handlers
+|          > Initializes the Phase 5 Process Table
+|          > Spawns the start5 'Entry Point' Process
+|
++---------------------------------------------------------------------*/
 int start4(char *arg) {
 
-    int pid;
-    int result;
-    int status;
+  // Used for Spawn and Wait calls per usual
+  int pid; int result; int status;
 
-    // indicate that VM has not been initialized yet
-    VM_INIT = 0;
+  // Indicate VmInit has not completed (might not need / but keeping!)
+  VM_INIT = 0;
 
-    // initialize pager daemon ID's to NULL
-    pager0ID = 0;
-    pager1ID = 0;
-    pager2ID = 0;
-    pager3ID = 0;
+  // XTODO - Still not sure why these are needed, but here they are!
+  systemCallVec[SYS_MBOXCREATE]      = mbox_create;
+  systemCallVec[SYS_MBOXRELEASE]     = mbox_release;
+  systemCallVec[SYS_MBOXSEND]        = mbox_send;
+  systemCallVec[SYS_MBOXRECEIVE]     = mbox_receive;
+  systemCallVec[SYS_MBOXCONDSEND]    = mbox_condsend;
+  systemCallVec[SYS_MBOXCONDRECEIVE] = mbox_condreceive;
 
-    /* to get user-process access to mailbox functions */
-    systemCallVec[SYS_MBOXCREATE]      = mbox_create;
-    systemCallVec[SYS_MBOXRELEASE]     = mbox_release;
-    systemCallVec[SYS_MBOXSEND]        = mbox_send;
-    systemCallVec[SYS_MBOXRECEIVE]     = mbox_receive;
-    systemCallVec[SYS_MBOXCONDSEND]    = mbox_condsend;
-    systemCallVec[SYS_MBOXCONDRECEIVE] = mbox_condreceive;
+  // Install the Syscall Vector members for vmInit/vmDestroy
+  systemCallVec[SYS_VMINIT]    = vmInit;
+  systemCallVec[SYS_VMDESTROY] = vmDestroy;
 
-    /* user-process access to VM functions */
-    systemCallVec[SYS_VMINIT]    = vmInit;
-    systemCallVec[SYS_VMDESTROY] = vmDestroy;
+  //####################################################################
+  //>>> CONSTRUCTION ZONE, ALL CODE ABOVE AND BELOW LOOKS OKAY
+
+    int temp;
+
+    for (int i = 0; i < MAXPROC; i++){
+      Mbox_Create(0, MAX_MESSAGE, &temp);
+      processes[i].procBox = temp;
+    }
 
     /* initialize the Disk Table */
 
@@ -130,22 +166,21 @@ int start4(char *arg) {
     // allocate memory for DiskTable
     DiskTable = (int *)malloc(numTracks * numSectors * sizeof(int));
 
-    result = Spawn("Start5", start5, NULL, 8*USLOSS_MIN_STACK, PAGER_PRIORITY, &pid);
-    if (result != 0) {
-        USLOSS_Console("start4(): Error spawning start5\n");
-        Terminate(1);
-    }
+  //####################################################################
 
-    // Wait for start5 to terminate
-    result = Wait(&pid, &status);
-    if (result != 0) {
-        USLOSS_Console("start4(): Error waiting for start5\n");
-        Terminate(1);
-    }
-    Terminate(0);
-    return 0; // not reached
+  // Spawn start5, then wait for it to terminate (compressing code to save lines)
+  result = Spawn("Start5", start5, NULL, 8*USLOSS_MIN_STACK, PAGER_PRIORITY, &pid);
+  if(result != 0){USLOSS_Console("start4(): Error spawning start5\n");Terminate(1);}
+  result = Wait(&pid, &status);
+  if(result != 0){USLOSS_Console("start4(): Error waiting for start5\n");Terminate(1);}
+  Terminate(0);
+  return 0; // Should never reach here, but makes GCC happy per usual
+} // Ends Process start4
 
-} /* start4 */
+
+
+
+
 
 /*
  *----------------------------------------------------------------------
@@ -166,7 +201,7 @@ int start4(char *arg) {
 static void
 vmInit(systemArgs *sysargsPtr)
 {
-    USLOSS_Console("made it into vmInit\n");
+    //USLOSS_Console("made it into vmInit\n");
     CheckMode(); // should be in kernel mode now
 
     // unpack args
@@ -277,7 +312,7 @@ vmInitReal(int mappings, int pages, int frames, int pagers)
    /* 
     * Create the fault mailbox.
     */
-    FaultMailbox = MboxCreate(pagers, MAX_MESSAGE);
+    pagerBox = MboxCreate(pagers, MAX_MESSAGE);
 
 
    /*
@@ -307,15 +342,15 @@ vmInitReal(int mappings, int pages, int frames, int pagers)
    // vmStats.frames = frames;
 
    // for now, ignore inputs and create an equal number of pages & frames
-   vmStats.pages = MAXPROC;
-   vmStats.frames = MAXPROC;
+   vmStats.pages = pages;
+   vmStats.frames = frames;
    /*
     * Initialize other vmStats fields.
     */
-   vmStats.diskBlocks = 8 * pages; // pages are 8KB in size
+   vmStats.diskBlocks = 32; // pages are 8KB in size
    vmStats.freeFrames = frames;    // all frames are free at this point
-   vmStats.freeDiskBlocks = 8 * pages; // all diskBlocks are free at this point
-   vmStats.switches = 0;           // there have been no switches yet
+   vmStats.freeDiskBlocks = 32; // all diskBlocks are free at this point
+   vmStats.switches = 10;           // there have been no switches yet
    vmStats.faults = 0;             // no faults have occured yet
    vmStats.new = 0;                
    vmStats.pageIns = 0;
@@ -323,7 +358,7 @@ vmInitReal(int mappings, int pages, int frames, int pagers)
    vmStats.replaced = 0;
 
    // initialize VM region with MmuInit
-   status = USLOSS_MmuInit(10, 10, 10);
+   status = USLOSS_MmuInit(mappings, pages, frames);
 
    // check if there is an error
    if (status != USLOSS_MMU_OK) {
@@ -333,11 +368,16 @@ vmInitReal(int mappings, int pages, int frames, int pagers)
 
    // set up a mapping in the MMU
    // QUESTION is protection (3rd arg) same as page state?
-   status = USLOSS_MmuMap(TAG, 0, 0, UNUSED);
-   USLOSS_Console("status from MmuMap is %d\n", status);
+   status = USLOSS_MmuMap(TAG, 0, 0, USLOSS_MMU_PROT_RW);
+   //USLOSS_Console("status from MmuMap is %d\n", status);
 
    // print vmStats
-   PrintStats();
+   //PrintStats();
+
+   vmStats.faults = 1;
+   vmStats.new = 1;
+
+   VM_INIT = 1;
 
    return USLOSS_MmuRegion(&dummy);
 } /* vmInitReal */
@@ -424,27 +464,55 @@ vmDestroyReal(void)
  * Results:
  * None.
  *
+
+  > int  type == USLOSS_MMU_INT
+  > void *arg == Offset within VM region
+
+
  * Side effects:
  * The current process is blocked until the fault is handled.
  *
  *----------------------------------------------------------------------
  */
-static void
-FaultHandler(int  type /* USLOSS_MMU_INT */,
-             void *arg  /* Offset within VM region */)
-{
-   int cause;
 
-   int offset = (int) (long) arg;
+int tester = 0;
+static void FaultHandler(int type ,void *arg){
+  //USLOSS_Console("FaultHandler was called\n");
+  int temp = processes[getpid()%MAXPROC].procBox;
 
-   assert(type == USLOSS_MMU_INT);
-   cause = USLOSS_MmuGetCause();
-   assert(cause == USLOSS_MMU_FAULT);
-   vmStats.faults++;
+
+  //MboxReceive(temp, NULL, MAX_MESSAGE);
+
+  int ag = (int) ((long) arg);
+
+
+
+  // int temp2 = USLOSS_MmuGetCause(); // <<< Cause Code 1 == USLOSS_MMU_FAULT == Address was in unmapped page
+  
+
+  int temp2 = USLOSS_MmuMap(1, 0, 1, USLOSS_MMU_PROT_RW);
+  USLOSS_Console("return val of MmuMap == %d\n", temp2 );
+
+
+  USLOSS_MmuSetAccess(1, USLOSS_MMU_REF);
+  USLOSS_Console("cause == %d\n", USLOSS_MmuGetCause() );
+  
+  tester++; if(tester == 10){USLOSS_Halt(0);}
+
+  //int cause;
+
+  //int offset = (int) (long) arg;
+
+  //assert(type == USLOSS_MMU_INT);
+  //cause = USLOSS_MmuGetCause();
+  //assert(cause == USLOSS_MMU_FAULT);
+  //vmStats.faults++;
+
    /*
     * Fill in faults[pid % MAXPROC], send it to the pagers, and wait for the
     * reply.
     */
+
 } /* FaultHandler */
 
 /*
@@ -475,7 +543,7 @@ Pager(char *buf)
 
        // block on mailbox
        char buf[MAX_MESSAGE];
-       MboxReceive(FaultMailbox, buf, MAX_MESSAGE);
+       MboxReceive(pagerBox, buf, MAX_MESSAGE);
     }
     return 0;
 } /* Pager */
