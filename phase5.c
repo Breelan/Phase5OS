@@ -12,6 +12,7 @@
 Notes:
 
  > XTODO: Relocate function definitions to Phase5.h before turnin
+ > XTODO: Utilization of Assert and Abort functions???
 
 
 +=====================================================================*/
@@ -25,6 +26,9 @@ Notes:
 #include <libuser.h>
 #include <vm.h>
 #include <string.h>
+// Will probably need these two at some point...
+#include <stdlib.h>
+#include <stdio.h>
 
 /*----------------------------------------------------------------------
 |>>> These are needed to work with libpatrickphase4.a
@@ -114,22 +118,25 @@ void        clockAlgo();      // Placeholder for the Clock Algorithm
 
 
 
-
 /*----------------------------------------------------------------------
 |>>> Function start4
 +-----------------------------------------------------------------------
-|
 | Purpose: > Initializes the VM system call handlers
 |          > Initializes the Phase 5 Process Table
 |          > Spawns the start5 'Entry Point' Process
 |
+| Parms:   char *arg - Process Argument per normal
+|
+| Effects: > Results    - MMU Return Status
+|          > Systemwide - The MMU is initialized
+|
+| Returns: Technically nothing, as it calls Terminate
 +---------------------------------------------------------------------*/
 int start4(char *arg) {
-
   // Used for Spawn and Wait calls per usual
   int pid; int result; int status;
 
-  // Indicate VmInit has not completed (might not need / but keeping!)
+  // Indicate VmInit has not completed (might not need, but keeping!)
   VM_INIT = 0;
 
   // XTODO - Still not sure why these are needed, but here they are!
@@ -181,90 +188,65 @@ int start4(char *arg) {
 
 
 
+/*----------------------------------------------------------------------
+|>>> Syscall Handler vmInit
++-----------------------------------------------------------------------
+| Purpose: > Unpacks and checks the systemArgs passed to it
+|          > Checks that these parameters are valid input
+|          > Calls vmInitReal to actually implement the operation
+|
+| Parms:   systemArgs *args - struct containing input from VmInit call
+|
+| Effects: > Results    - None
+|          > Systemwide - The VM System is initialized
+|
+| Returns: Nothing
++---------------------------------------------------------------------*/
+static void vmInit(systemArgs *args){
 
-/*
- *----------------------------------------------------------------------
- *
- * VmInit --
- *
- * Unpacks and checks the systemArgs passed to it before calling vmInitReal 
- * to handle the real logic.
- *
- * Results:
- *      None.
- *
- * Side effects:
- *      VM system is initialized.
- *
- *----------------------------------------------------------------------
- */
-static void
-vmInit(systemArgs *sysargsPtr)
-{
-    //USLOSS_Console("made it into vmInit\n");
-    CheckMode(); // should be in kernel mode now
+  CheckMode(); // Kernel Mode Check
 
-    // unpack args
-    int mappings = (int) ((long) sysargsPtr->arg1);
-    int pages = (int) ((long) sysargsPtr->arg2);
-    int frames = (int) ((long) sysargsPtr->arg3);
-    int pagers = (int) ((long) sysargsPtr->arg4);
+  //>>> Phase 1 - Unpack systemArgs arguments
+  int mappings = (int) ((long) args->arg1);
+  int pages =    (int) ((long) args->arg2);
+  int frames =   (int) ((long) args->arg3);
+  int pagers =   (int) ((long) args->arg4);
 
-    // check args
+  //>>> Phase 2 - Check arguments for validity
 
-    // cannot create more than max pagers
-    if(pagers > MAXPAGERS) {
-        USLOSS_Console("too many pagers!\n");
-      sysargsPtr->arg4 = (void *)((long) -2);
-      return;
-    }
-
-    // check if VM region has already been initialized
-    if(VM_INIT == 1) {
-      USLOSS_Console("vm region already initialized!\n");
-      sysargsPtr->arg4 = (void *)((long) -2);
-      return;
-    }
-
-    // mappings should equal pages
-    if(mappings != pages) {
-      USLOSS_Console("mappings do not equal pages!\n");
-      sysargsPtr->arg4 = (void *)((long) -1);
-      return;
-    }
-
-    // call vmInitReal
-    int result = (int) (long)vmInitReal(mappings, pages, frames, pagers);
-
-    // result should hold address of the first byte in the VM region
-    sysargsPtr->arg1 = (void *)((long) result);
-    sysargsPtr->arg4 = 0;
+  // Check 1: Cannot create more than max pagers
+  if(pagers > MAXPAGERS) {
+    USLOSS_Console("too many pagers!\n");
+    args->arg4 = (void *)((long) -1);
     return;
+  }
 
-} /* vmInit */
+  // Check 2: VM Region can only be initialized once
+  if(VM_INIT == 1) {
+    USLOSS_Console("vm region already initialized!\n");
+    args->arg4 = (void *)((long) -2);
+    return;
+  }
 
+  // Check 3: Mappings should equal pages
+  if(mappings != pages) {
+    USLOSS_Console("mappings do not equal pages!\n");
+    args->arg4 = (void *)((long) -1);
+    return;
+  }
 
-/*
- *----------------------------------------------------------------------
- *
- * vmDestroy --
- *
- * Stub for the VmDestroy system call.
- *
- * Results:
- *      None.
- *
- * Side effects:
- *      VM system is cleaned up.
- *
- *----------------------------------------------------------------------
- */
+  //>>> Phase 3 - Call vmInitReal to initialize VM Subsystem
+  // XTODO - Couldn't we directly assign return of vmInitReal to arg1 ???
+  // XTODO - I am also suspecting that maybe we have to do a local assignment 
+  //         of vmRegion = result as well. Asked for clarification on Piazza
+  int result = (int) (long)vmInitReal(mappings, pages, frames, pagers);
 
-static void
-vmDestroy(systemArgs *sysargsPtr)
-{
-   CheckMode();
-} /* vmDestroy */
+  // Result should hold address of first byte in VM region
+  args->arg1 = (void *)((long) result);
+  args->arg4 = 0;
+  return;
+} // Ends Syscall Handler vmInit
+
 
 
 /*
@@ -284,173 +266,113 @@ vmDestroy(systemArgs *sysargsPtr)
  *
  *----------------------------------------------------------------------
  */
-void *
-vmInitReal(int mappings, int pages, int frames, int pagers)
-{
-   int status;
-   int dummy;
-   int pid;
+void * vmInitReal(int mappings, int pages, int frames, int pagers){
 
-   CheckMode();
-   // THE FOLLOWING CAME WITH SKELETON
-   // status = USLOSS_MmuInit(mappings, pages, frames);
-   // if (status != USLOSS_MMU_OK) {
-   //    USLOSS_Console("vmInitReal: couldn't init MMU, status %d\n", status);
-   //    abort();
-   // }
+  CheckMode(); // Kernel Mode Check
 
-   // install fault handler
-   USLOSS_IntVec[USLOSS_MMU_INT] = FaultHandler;
+  int status;
+  int dummy;
+  int pid;
+  int i = 0; // Used for loops (C-99 habit I've developed!)
+
+  //>>> Phase 1 - Assign MMU Settings to globals, each is valid at this point
+  NUM_MAPPINGS = mappings;
+  NUM_PAGES    = pages;
+  NUM_FRAMES   = frames;
+  NUM_PAGERS   = pagers;
+
+  
+
+  //>>> Phase 2 - Call USLOSS_MmuInit, check its return value to detect error
+  status = USLOSS_MmuInit(mappings, pages, frames);
+  if(status != USLOSS_MMU_OK){
+    USLOSS_Console("vmInitReal: couldn't init MMU, status %d\n", status);
+    abort(); // XTODO: Here's a new C function!
+  }
+
+  //>>> Phase 3 - Install Fault Handler
+  USLOSS_IntVec[USLOSS_MMU_INT] = FaultHandler;
+
+  //>>> Phase 4 - Initialize Frame Table (TBD)
 
 
-   /*
-    * Initialize page tables.
-    */
+  //>>> Phase 5 - Create Fault Mailboxes
+  // XTODO - I THINK THIS MEANS THE BOXES IN faults[MAXPROC]
 
+  //for (int i = 0; i < MAXPROC; i++){
+  //  faults[i].myPID = -1;
+  //  faults[i].addr  = NULL;
+  //  faults[i].replyMbox = -1 or give it a boxID but have to manage changing PIDs
+  //}
 
+  pagerBox = MboxCreate(pagers, MAX_MESSAGE);
 
-   /* 
-    * Create the fault mailbox.
-    */
-    pagerBox = MboxCreate(pagers, MAX_MESSAGE);
+  //>>> Phase 6 - Fork the Pager Daemons, store pager pids in global variables.
 
+  /*>>> ANOTHER WAY TO FORK THE PAGERS
 
-   /*
-    * Fork the pagers. Store pager pids in global variables.
-    */
-    // for(int i = 0; i < pagers; i++) {
-    //   if(i == 0) {
-    //     pager0ID = fork1("pager0", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
-    //   }
-    //   if(i == 1) {
-    //     pager1ID = fork1("pager1", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
-    //   }
-    //   if(i == 2) {
-    //     pager2ID = fork1("pager2", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);   
-    //   }
-    //   if(i == 3) {
-    //     pager3ID = fork1("pager3", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
-    //   }      
-    // }
+  //Borrowing this technique from Dr. Homer's Phase 4 skeleton code
 
-   /*
-    * Zero out, then initialize, the vmStats structure
-    */
-   memset((char *) &vmStats, 0, sizeof(VmStats));
-   
-   // vmStats.pages = pages;
-   // vmStats.frames = frames;
+  char buf[10];
+  for (i = 0; i < NUM_PAGERS; i++) {
+    sprintf(buf, "%d", i); // Why not tell the pager which one it is?
+    pagerID[i] = fork1("PagerDaemon", Pager, buf, USLOSS_MIN_STACK, PAGER_PRIORITY);
+  }
 
-   // for now, ignore inputs and create an equal number of pages & frames
-   vmStats.pages = pages;
-   vmStats.frames = frames;
-   /*
-    * Initialize other vmStats fields.
-    */
-   vmStats.diskBlocks = 32; // pages are 8KB in size
-   vmStats.freeFrames = frames;    // all frames are free at this point
-   vmStats.freeDiskBlocks = 32; // all diskBlocks are free at this point
-   vmStats.switches = 10;           // there have been no switches yet
-   vmStats.faults = 0;             // no faults have occured yet
-   vmStats.new = 0;                
-   vmStats.pageIns = 0;
-   vmStats.pageOuts = 0;
-   vmStats.replaced = 0;
-
-   // initialize VM region with MmuInit
-   status = USLOSS_MmuInit(mappings, pages, frames);
-
-   // check if there is an error
-   if (status != USLOSS_MMU_OK) {
-      USLOSS_Console("vmInitReal: couldn't init MMU, status %d\n", status);
-      abort();
+  */
+    
+  /*
+  for(int i = 0; i < pagers; i++) {
+    if(i == 0) {
+       pager0ID = fork1("pager0", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
+    }
+    if(i == 1) {
+      pager1ID = fork1("pager1", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
+    }
+    if(i == 2) {
+      pager2ID = fork1("pager2", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);   
+    }
+    if(i == 3) {
+      pager3ID = fork1("pager3", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
+     }      
    }
+  */
 
-   // set up a mapping in the MMU
-   // QUESTION is protection (3rd arg) same as page state?
-   status = USLOSS_MmuMap(TAG, 0, 0, USLOSS_MMU_PROT_RW);
-   //USLOSS_Console("status from MmuMap is %d\n", status);
+  //>>> Phase 7 - Zero out, then initialize vmStats structure
+  memset((char *) &vmStats, 0, sizeof(VmStats));
+  vmStats.pages      = pages;
+  vmStats.frames     = frames;
+  vmStats.freeFrames = frames;
+  vmStats.switches   = 10;     // Placeholder - should be 0 (zero)
+  vmStats.faults     = 1;      // Placeholder - should be 0 (zero)
+  vmStats.new        = 1;      // Placeholder - should be 0 (zero)  
+  vmStats.pageIns    = 0;
+  vmStats.pageOuts   = 0;
+  vmStats.replaced   = 0;
 
-   // print vmStats
-   //PrintStats();
+  /* XTODO: I think we need to do a diskSizeReal call here. From the Phase 4 Spec - 
 
-   vmStats.faults = 1;
-   vmStats.new = 1;
+     > int diskSizeReal(int unit, int *sector, int *track, int *disk)
 
-   VM_INIT = 1;
+     > Returns information about the size of the disk indicated by unit. 
 
-   return USLOSS_MmuRegion(&dummy);
-} /* vmInitReal */
-
-
-/*
- *----------------------------------------------------------------------
- *
- * PrintStats --
- *
- *      Print out VM statistics.
- *
- * Results:
- *      None
- *
- * Side effects:
- *      Stuff is printed to the USLOSS_Console.
- *
- *----------------------------------------------------------------------
- */
-void
-PrintStats(void)
-{
-     USLOSS_Console("VmStats\n");
-     USLOSS_Console("pages:          %d\n", vmStats.pages);
-     USLOSS_Console("frames:         %d\n", vmStats.frames);
-     USLOSS_Console("diskBlocks:     %d\n", vmStats.diskBlocks);
-     USLOSS_Console("freeFrames:     %d\n", vmStats.freeFrames);
-     USLOSS_Console("freeDiskBlocks: %d\n", vmStats.freeDiskBlocks);
-     USLOSS_Console("switches:       %d\n", vmStats.switches);
-     USLOSS_Console("faults:         %d\n", vmStats.faults);
-     USLOSS_Console("new:            %d\n", vmStats.new);
-     USLOSS_Console("pageIns:        %d\n", vmStats.pageIns);
-     USLOSS_Console("pageOuts:       %d\n", vmStats.pageOuts);
-     USLOSS_Console("replaced:       %d\n", vmStats.replaced);
-} /* PrintStats */
+     > Sector pointer filled in with number of bytes in a sector
+     > Track  pointer filled in with number of sectors in a track
+     > Disk   pointer filled in with number of tracks in the disk.
+  */
+  vmStats.diskBlocks = 32; // DO A DISK SIZE REAL CALL HERE??? 
+  vmStats.freeDiskBlocks = 32; // 
 
 
-/*
- *----------------------------------------------------------------------
- *
- * vmDestroyReal --
- *
- * Called by vmDestroy.
- * Frees all of the global data structures
- *
- * Results:
- *      None
- *
- * Side effects:
- *      The MMU is turned off.
- *
- *----------------------------------------------------------------------
- */
-void
-vmDestroyReal(void)
-{
+  //>>> TEMP - Set up sample mapping in MMU
+  status = USLOSS_MmuMap(TAG, 0, 0, USLOSS_MMU_PROT_RW);
+  //####################################################################
 
-   CheckMode();
-   USLOSS_MmuDone();
-   /*
-    * Kill the pagers here.
-    */
-   /* 
-    * Print vm statistics.
-    */
-   USLOSS_Console("vmStats:\n");
-   USLOSS_Console("pages: %d\n", vmStats.pages);
-   USLOSS_Console("frames: %d\n", vmStats.frames);
-   USLOSS_Console("blocks: %d\n", vmStats.diskBlocks);
-   /* and so on... */
+  //>>> Phase 8 - Assign VM_INIT to 1, Return address of VM Region
+  VM_INIT = 1;
+  return USLOSS_MmuRegion(&dummy);
+} // Ends Function vmInitReal
 
-} /* vmDestroyReal */
 
 /*
  *----------------------------------------------------------------------
@@ -547,3 +469,93 @@ Pager(char *buf)
     }
     return 0;
 } /* Pager */
+
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * vmDestroy --
+ *
+ * Stub for the VmDestroy system call.
+ *
+ * Results:
+ *      None.
+ *
+ * Side effects:
+ *      VM system is cleaned up.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static void
+vmDestroy(systemArgs *sysargsPtr)
+{
+   CheckMode();
+} /* vmDestroy */
+
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * vmDestroyReal --
+ *
+ * Called by vmDestroy.
+ * Frees all of the global data structures
+ *
+ * Results:
+ *      None
+ *
+ * Side effects:
+ *      The MMU is turned off.
+ *
+ *----------------------------------------------------------------------
+ */
+void
+vmDestroyReal(void)
+{
+
+   CheckMode();
+   USLOSS_MmuDone();
+   /*
+    * Kill the pagers here.
+    */
+   /* 
+    * Print vm statistics.
+    */
+   USLOSS_Console("vmStats:\n");
+   USLOSS_Console("pages: %d\n", vmStats.pages);
+   USLOSS_Console("frames: %d\n", vmStats.frames);
+   USLOSS_Console("blocks: %d\n", vmStats.diskBlocks);
+   /* and so on... */
+
+} /* vmDestroyReal */
+
+
+
+
+
+
+
+
+/*----------------------------------------------------------------------
+|>>> Function PrintStats
++-----------------------------------------------------------------------
+| Purpose: Prints out attributes of the vmStats VM statistics struct.
+| Parms:   systemArgs *args - struct containing input from VmInit call
+| Effects: Stuff is printed to the USLOSS_Console.
++---------------------------------------------------------------------*/
+void PrintStats(void){
+  USLOSS_Console("VmStats\n");
+  USLOSS_Console("pages:          %d\n", vmStats.pages);
+  USLOSS_Console("frames:         %d\n", vmStats.frames);
+  USLOSS_Console("diskBlocks:     %d\n", vmStats.diskBlocks);
+  USLOSS_Console("freeFrames:     %d\n", vmStats.freeFrames);
+  USLOSS_Console("freeDiskBlocks: %d\n", vmStats.freeDiskBlocks);
+  USLOSS_Console("switches:       %d\n", vmStats.switches);
+  USLOSS_Console("faults:         %d\n", vmStats.faults);
+  USLOSS_Console("new:            %d\n", vmStats.new);
+  USLOSS_Console("pageIns:        %d\n", vmStats.pageIns);
+  USLOSS_Console("pageOuts:       %d\n", vmStats.pageOuts);
+  USLOSS_Console("replaced:       %d\n", vmStats.replaced);
+} // Ends Function PrintStats
