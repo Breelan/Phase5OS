@@ -6,6 +6,9 @@ extern int debugflag;
 void
 p1_fork(int pid)
 {
+  //  USLOSS_Console("p1_fork() called: pid = %d\n", pid);
+
+
     if (DEBUG && debugflag)
         USLOSS_Console("p1_fork() called: pid = %d\n", pid);
 } /* p1_fork */

@@ -37,6 +37,7 @@ typedef struct PTE {
 typedef struct Process {
     int  numPages;   // Size of the page table.
     PTE  *pageTable; // The page table for the process.
+    int procBox; // Private mailbox for this process.
     // Add more stuff here */
 } Process;
 
@@ -50,5 +51,14 @@ typedef struct FaultMsg {
     int  replyMbox;  // Mailbox to send reply.
     // Add more stuff here.
 } FaultMsg;
+
+
+
+// Frame Table Entry
+typedef struct FTE{
+
+  int owner;
+
+};
 
 #define CheckMode() assert(USLOSS_PsrGet() & USLOSS_PSR_CURRENT_MODE)
