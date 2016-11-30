@@ -472,70 +472,76 @@ Pager(char *buf)
 
 
 
-/*
- *----------------------------------------------------------------------
- *
- * vmDestroy --
- *
- * Stub for the VmDestroy system call.
- *
- * Results:
- *      None.
- *
- * Side effects:
- *      VM system is cleaned up.
- *
- *----------------------------------------------------------------------
- */
 
-static void
-vmDestroy(systemArgs *sysargsPtr)
-{
-   CheckMode();
-} /* vmDestroy */
+/*----------------------------------------------------------------------
+|>>> Syscall Handler vmDestroy
++-----------------------------------------------------------------------
+| Purpose: Wrapper function for vmDestroyReal, which actually implements
+|          the termination of the VM Subsystem. If VM_INIT==1, i.e. the
+|          VM Subsystem was initialized: vmDestroyReal is called. 
+|
+|          Otherwise, the handler returns having done nothing.
+|
+| Parms:   systemArgs *args - struct containing input from VmInit call
+| Effects: If the VM System was initialized, the VM System is terminated
+|          (i.e. 'cleaned up' via Dr. Homer) via the vmDestroyReal call.
+| Returns: Nothing
++---------------------------------------------------------------------*/
+static void vmDestroy(systemArgs *args){
+  CheckMode(); // Are we in Kernel Mode?
+  if(VM_INIT == 1){vmDestroyReal();}
+} // Ends Syscall Handler vmDestroy
 
 
-/*
- *----------------------------------------------------------------------
- *
- * vmDestroyReal --
- *
- * Called by vmDestroy.
- * Frees all of the global data structures
- *
- * Results:
- *      None
- *
- * Side effects:
- *      The MMU is turned off.
- *
- *----------------------------------------------------------------------
- */
-void
-vmDestroyReal(void)
-{
+/*----------------------------------------------------------------------
+|>>> Function vmDestroyReal
++-----------------------------------------------------------------------
+| Purpose: Called by vmDestroy iff the VM Subsystem has been initialized
+|          this function implments the termination of the VM Subsystem.
+|
+| Algo:    1) Calls USLOSS_MmuDone, which via USLOSS Manual Sec 5.2 will
+|             "release all the resources associated with the MMU"
+|
+|          2) Kills all Pager processes by sending them special messages
+|             which trigger them to terminate. At present, this message
+|             will be a PID of -1 (negative one), though we may change
+|             this in future development WLOG to the main intention.
+|
+|          3) Sends the aforementioned messages to the pager processes
+|             one by one in a loop. Following each message send will be
+|             a call of join - this will block vmDestroyReal until the
+|             corresponding Pager process terminates and quits, which
+|             guarantees that all Pager processes will have quit when
+|             vmDestroyReal returns.
+|
+|          4) Frees malloced Data Structures. At the present time, this
+|             may include each Process' Page Table, th Frame Table, the
+|             Disk Table, and/or other structures as they come up.
+|
+| Parms:   None
+| Effects: Systemwide - The MMU is turned off
++---------------------------------------------------------------------*/
+void vmDestroyReal(void){
+  CheckMode(); // Are we in Kernel Mode?
 
-   CheckMode();
-   USLOSS_MmuDone();
-   /*
-    * Kill the pagers here.
-    */
-   /* 
-    * Print vm statistics.
-    */
-   USLOSS_Console("vmStats:\n");
-   USLOSS_Console("pages: %d\n", vmStats.pages);
-   USLOSS_Console("frames: %d\n", vmStats.frames);
-   USLOSS_Console("blocks: %d\n", vmStats.diskBlocks);
-   /* and so on... */
+  //>>> Phase 1 - Call USLOSS_MmuDone
+  USLOSS_MmuDone();
 
-} /* vmDestroyReal */
+  //>>> Phase 2 - Kill the Pagers
 
+  //>>> Phase 3 - Free malloced structures 
 
+  //>>> Phase 4 - Print VM Stats (Not mentioned in spec - but its in your skeleton code so...)
 
+  //PrintStats(); // Might not be what Homer did
 
+  // Keeping these in case Homer wants to print these 4 and not call PrintStats
+  USLOSS_Console("vmStats:\n");
+  USLOSS_Console("pages: %d\n", vmStats.pages);
+  USLOSS_Console("frames: %d\n", vmStats.frames);
+  USLOSS_Console("blocks: %d\n", vmStats.diskBlocks);
 
-
+} // Ends Function vmDestroyReal
 
 
 /*----------------------------------------------------------------------
