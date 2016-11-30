@@ -286,27 +286,15 @@ vmInitReal(int mappings, int pages, int frames, int pagers)
     // for(int i = 0; i < pagers; i++) {
     //   if(i == 0) {
     //     pager0ID = fork1("pager0", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
-           // block on mailbox
-           // char buf[MAX_MESSAGE];
-           // MboxReceive(FaultMailbox, buf, MAX_MESSAGE);
     //   }
     //   if(i == 1) {
     //     pager1ID = fork1("pager1", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
-           // block on mailbox
-           // char buf[MAX_MESSAGE];
-           // MboxReceive(FaultMailbox, buf, MAX_MESSAGE);
     //   }
     //   if(i == 2) {
-    //     pager2ID = fork1("pager2", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
-           // block on mailbox
-           // char buf[MAX_MESSAGE];
-           // MboxReceive(FaultMailbox, buf, MAX_MESSAGE);    
+    //     pager2ID = fork1("pager2", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);   
     //   }
     //   if(i == 3) {
     //     pager3ID = fork1("pager3", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
-           // block on mailbox
-           // char buf[MAX_MESSAGE];
-           // MboxReceive(FaultMailbox, buf, MAX_MESSAGE);    
     //   }      
     // }
 
@@ -484,6 +472,10 @@ Pager(char *buf)
          * replace a page (perhaps write to disk) */
         /* Load page into frame from disk, if necessary */
         /* Unblock waiting (faulting) process */
+
+       // block on mailbox
+       char buf[MAX_MESSAGE];
+       MboxReceive(FaultMailbox, buf, MAX_MESSAGE);
     }
     return 0;
 } /* Pager */
