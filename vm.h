@@ -21,12 +21,13 @@
 
 /*
  * Page table entry.
+   Via Homer - Should NOT need additional information outside what is in skeleton
  */
 typedef struct PTE {
     int  state;      // See above.
     int  frame;      // Frame that stores the page (if any). -1 if none.
     int  diskBlock;  // Disk block that stores the page (if any). -1 if none.
-    // Add more stuff here
+    // Add more stuff here >>> XTODO - Dont think these 2 are needed, they are in MMU System
     int  dirtyBit;   // Examine this bit to see if PTE is dirty or not
     int referenceBit; // ??? needed? or is this the same as state?
 } PTE;
