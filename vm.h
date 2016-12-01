@@ -61,4 +61,10 @@ typedef struct FTE{
 
 };
 
+// Disk Table Entry
+typedef struct DTE {
+    int pid;         // Process that owns this sector
+    int page;        // Page # associated with this sector
+} DTE;
+
 #define CheckMode() assert(USLOSS_PsrGet() & USLOSS_PSR_CURRENT_MODE)

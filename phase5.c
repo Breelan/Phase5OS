@@ -171,7 +171,7 @@ int start4(char *arg) {
     DiskSize(1, &numSectors, &numTracks, &diskSize);
 
     // allocate memory for DiskTable
-    DiskTable = (int *)malloc(numTracks * numSectors * sizeof(int));
+    DiskTable = (int *)malloc(numTracks * numSectors * sizeof(DTE));
 
   //####################################################################
 
@@ -466,6 +466,8 @@ Pager(char *buf)
        // block on mailbox
        char buf[MAX_MESSAGE];
        MboxReceive(pagerBox, buf, MAX_MESSAGE);
+
+
     }
     return 0;
 } /* Pager */
