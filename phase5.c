@@ -370,6 +370,8 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
 
   //>>> Phase 8 - Assign VM_INIT to 1, Return address of VM Region
   VM_INIT = 1;
+  int test = (int) ((long)USLOSS_MmuRegion(&dummy));
+  USLOSS_Console("test is %d, dummy is %d\n", test, dummy);
   return USLOSS_MmuRegion(&dummy);
 } // Ends Function vmInitReal
 
@@ -435,6 +437,7 @@ static void FaultHandler(int type ,void *arg){
     * reply.
     */
 
+
 } /* FaultHandler */
 
 /*
@@ -467,6 +470,22 @@ Pager(char *buf)
        char buf[MAX_MESSAGE];
        MboxReceive(pagerBox, buf, MAX_MESSAGE);
 
+       // break out the frame number - basically the pid
+       int frameId = atoi(buf);
+
+       // get the faultmsg associated with the pid
+       FaultMsg msg = faults[frameID];
+
+       // get the frame
+       int frame = (int) ((long)msg.addr)/NUM_FRAMES;
+
+       // need to check the process' pages to see if we can use one
+       // first get the page table
+       PTE *pages = processes[frameId].pageTable;
+
+       // for (int i = 0; i < processes[frameId].numPages; i++) {
+       //  check state of the page - STATE MUST FIRST BE SET
+       // }
 
     }
     return 0;
