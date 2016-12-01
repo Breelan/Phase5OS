@@ -18,7 +18,6 @@
 #define CLEAN  0
 
 
-
 /*
  * Page table entry.
    Via Homer - Should NOT need additional information outside what is in skeleton
@@ -57,10 +56,8 @@ typedef struct FaultMsg {
 
 // Frame Table Entry
 typedef struct FTE{
-
   int owner;
-
-};
+}FTE;
 
 // Disk Table Entry
 typedef struct DTE {

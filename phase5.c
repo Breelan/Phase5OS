@@ -66,7 +66,7 @@ extern void mbox_condreceive(systemArgs *args_ptr);
 ----------------------------------------------------------------------*/
 
 // Data Structures _____________________________________________________
-static Process processes[MAXPROC]; // Phase 5 Process Table
+Process processes[MAXPROC]; // Phase 5 Process Table
 FaultMsg       faults[MAXPROC];    // Fault Info Table, defined in vm.h
 VmStats        vmStats;            // VM system stats, defined in vm.h 
 void           *vmRegion;          // Start address of Virtual Memory
@@ -80,10 +80,12 @@ int            NUM_PAGES;          // Number of Pages
 int            NUM_MAPPINGS;       // Number of Mappings
 int            NUM_FRAMES;         // Number of Frames
 int            NUM_PAGERS;         // Number of Pager Daemons
+void           *VM_REGION;          // Where vmRegion starts
 
 // Misc. / 'In a Rush' Added ___________________________________________
 int *          DiskTable;          // Current state of Disk 1
 int            VM_INIT;            // Informs if VmInit has completed
+
 
 
 /*----------------------------------------------------------------------
@@ -294,11 +296,11 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
   USLOSS_IntVec[USLOSS_MMU_INT] = FaultHandler;
 
   //>>> Phase 4 - Initialize Page Tables (see documentation for more info)
-  for (int i = 0; i < MAXPROC; i++){
-    processes[i].PTE.state     = UNUSED;
-    processes[i].PTE.frame     = -1;
-    processes[i].PTE.diskBlock = -1;
-  }
+  // for (int i = 0; i < MAXPROC; i++){
+  //   processes[i].PTE.state     = UNUSED;
+  //   processes[i].PTE.frame     = -1;
+  //   processes[i].PTE.diskBlock = -1;
+  // }
 
   //>>> Phase 5 - Initialize Frame Table (TBD)
 
@@ -308,7 +310,7 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
 
   // Note: Can assign permanent mailbox on guarantee that Pager will always do a send on a box
   for (int i = 0; i < MAXPROC; i++){
-    faults[i].myPID = -1;
+    faults[i].pid = -1;
     faults[i].addr  = NULL;
     faults[i].replyMbox = MboxCreate(0, 0);
   }
@@ -329,7 +331,7 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
   vmStats.frames     = frames;
   vmStats.freeFrames = frames;
   vmStats.switches   = 10;     // Placeholder - should be 0 (zero)
-  vmStats.faults     = 1;      // Placeholder - should be 0 (zero)
+  vmStats.faults     = 0;      // Placeholder - should be 0 (zero)
   vmStats.new        = 1;      // Placeholder - should be 0 (zero)  
   vmStats.pageIns    = 0;
   vmStats.pageOuts   = 0;
@@ -350,14 +352,13 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
 
 
   //>>> TEMP - Set up sample mapping in MMU
-  status = USLOSS_MmuMap(TAG, 0, 0, USLOSS_MMU_PROT_RW);
+  // status = USLOSS_MmuMap(TAG, 0, 0, USLOSS_MMU_PROT_RW);
   //####################################################################
 
   //>>> Phase 8 - Assign VM_INIT to 1, Return address of VM Region
-  VM_INIT = 1;
-  int test = (int) ((long)USLOSS_MmuRegion(&dummy));
-  USLOSS_Console("test is %d, dummy is %d\n", test, dummy);
-  return USLOSS_MmuRegion(&dummy);
+  VM_INIT = 1; 
+  VM_REGION = USLOSS_MmuRegion(&dummy);
+  return VM_REGION;
 } // Ends Function vmInitReal
 
 
@@ -394,6 +395,7 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
 |          unclear, and worse - potentially misleading.
 +---------------------------------------------------------------------*/
 static void FaultHandler(int  type , void *arg){
+  
   int cause;
   int offset = (int) (long)arg;
   int pid = getpid();
@@ -409,11 +411,12 @@ static void FaultHandler(int  type , void *arg){
   faults[pid%MAXPROC].addr = vmRegion + offset;
    
   //>>> Phase 3 - Send the Message, PID as the key
-  int msg = pid; // XTODO - Might not need this
-  MboxSend(pagerBox, &msg, sizeof(msg));
+  char buf[MAX_MESSAGE];
+  sprintf(buf, "%d", pid); // convert int to string
+  MboxSend(pagerBox, buf, sizeof(int));
 
   //>>> Phase 4 - Block on the procss' private mailbox
-  MboxReceive(faults[pid%MAXPROC].procBox, NULL, 0);
+  MboxReceive(faults[pid%MAXPROC].replyMbox, NULL, 0);
 
 } // Ends Interrupt Handler FaultHandler
 
@@ -435,7 +438,10 @@ static void FaultHandler(int  type , void *arg){
 static int
 Pager(char *buf)
 {
+    int status;
+
     while(1) {
+      
         /* Wait for fault to occur (receive from mailbox) */
         /* Look for free frame */
         /* If there isn't one then use clock algorithm to
@@ -447,22 +453,28 @@ Pager(char *buf)
        char buf[MAX_MESSAGE];
        MboxReceive(pagerBox, buf, MAX_MESSAGE);
 
-       // break out the frame number - basically the pid
+       // convert string to int and get the pid of the requesting process
        int frameId = atoi(buf);
 
        // get the faultmsg associated with the pid
-       FaultMsg msg = faults[frameID];
+       FaultMsg msg = faults[frameId];
 
-       // get the frame
-       int frame = (int) ((long)msg.addr)/NUM_FRAMES;
+       // get the frame number
+       int frame = ( ( (int) ((long)msg.addr)) - ((int) ((long)VM_REGION)))/ (NUM_FRAMES * 8);
 
        // need to check the process' pages to see if we can use one
-       // first get the page table
-       PTE *pages = processes[frameId].pageTable;
+       int page = 0;
+       for (int i = 0; i < processes[frameId].numPages; i++) {
+          if (processes[frameId].pageTable[i].state == UNUSED) {
+            page = i;
+          }
+       }
 
-       // for (int i = 0; i < processes[frameId].numPages; i++) {
-       //  check state of the page - STATE MUST FIRST BE SET
-       // }
+       // do the mapping TODO move this to p1_switch
+       status = USLOSS_MmuMap(TAG, page, frame, USLOSS_MMU_PROT_RW);
+
+       // wake up the faulting process
+       MboxSend(faults[frameId%MAXPROC].replyMbox, NULL, 0);
 
     }
     return 0;
@@ -534,10 +546,10 @@ void vmDestroyReal(void){
   //PrintStats(); // Might not be what Homer did
 
   // Keeping these in case Homer wants to print these 4 and not call PrintStats
-  USLOSS_Console("vmStats:\n");
-  USLOSS_Console("pages: %d\n", vmStats.pages);
-  USLOSS_Console("frames: %d\n", vmStats.frames);
-  USLOSS_Console("blocks: %d\n", vmStats.diskBlocks);
+  // USLOSS_Console("vmStats:\n");
+  // USLOSS_Console("pages: %d\n", vmStats.pages);
+  // USLOSS_Console("frames: %d\n", vmStats.frames);
+  // USLOSS_Console("blocks: %d\n", vmStats.diskBlocks);
 
   // We no longer have an initialized MMU / VM Subsystem! 
   VM_INIT = 0;
