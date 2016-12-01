@@ -185,9 +185,6 @@ int start4(char *arg) {
 } // Ends Process start4
 
 
-
-
-
 /*----------------------------------------------------------------------
 |>>> Syscall Handler vmInit
 +-----------------------------------------------------------------------
@@ -248,12 +245,10 @@ static void vmInit(systemArgs *args){
 } // Ends Syscall Handler vmInit
 
 
+/*----------------------------------------------------------------------
+|>>> Function vmInitReal
++-----------------------------------------------------------------------
 
-/*
- *----------------------------------------------------------------------
- *
- * vmInitReal --
- *
  * Called by vmInit.
  * Initializes the VM system by configuring the MMU and setting
  * up the page tables.
@@ -263,9 +258,16 @@ static void vmInit(systemArgs *args){
  *
  * Side effects:
  *      The MMU is initialized.
++-----------------------------------------------------------------------
+| Implementation Notes: 
+| 
+| > Page Table attribute initialization values (Via Homer):
+|    o aProcess.state     = UNUSED;
+|    o aProcess.frame     = -1 (becaue memory can have a 0th frame)
+|    o aProcess.diskBlock = -1 (because disk can have a 0th block)
  *
- *----------------------------------------------------------------------
- */
+
++---------------------------------------------------------------------*/
 void * vmInitReal(int mappings, int pages, int frames, int pagers){
 
   CheckMode(); // Kernel Mode Check
@@ -281,8 +283,6 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
   NUM_FRAMES   = frames;
   NUM_PAGERS   = pagers;
 
-  
-
   //>>> Phase 2 - Call USLOSS_MmuInit, check its return value to detect error
   status = USLOSS_MmuInit(mappings, pages, frames);
   if(status != USLOSS_MMU_OK){
@@ -293,50 +293,35 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
   //>>> Phase 3 - Install Fault Handler
   USLOSS_IntVec[USLOSS_MMU_INT] = FaultHandler;
 
-  //>>> Phase 4 - Initialize Frame Table (TBD)
+  //>>> Phase 4 - Initialize Page Tables (see documentation for more info)
+  for (int i = 0; i < MAXPROC; i++){
+    processes[i].PTE.state     = UNUSED;
+    processes[i].PTE.frame     = -1;
+    processes[i].PTE.diskBlock = -1;
+  }
+
+  //>>> Phase 5 - Initialize Frame Table (TBD)
 
 
-  //>>> Phase 5 - Create Fault Mailboxes
+  //>>> Phase 6 - Create Fault Mailboxes
   // XTODO - I THINK THIS MEANS THE BOXES IN faults[MAXPROC]
 
-  //for (int i = 0; i < MAXPROC; i++){
-  //  faults[i].myPID = -1;
-  //  faults[i].addr  = NULL;
-  //  faults[i].replyMbox = -1 or give it a boxID but have to manage changing PIDs
-  //}
+  // Note: Can assign permanent mailbox on guarantee that Pager will always do a send on a box
+  for (int i = 0; i < MAXPROC; i++){
+    faults[i].myPID = -1;
+    faults[i].addr  = NULL;
+    faults[i].replyMbox = MboxCreate(0, 0);
+  }
 
+  //>>> Phase 7 - Create the Pager Daemon 'Requests Mailbox / Queue'
   pagerBox = MboxCreate(pagers, MAX_MESSAGE);
 
   //>>> Phase 6 - Fork the Pager Daemons, store pager pids in global variables.
-
-  /*>>> ANOTHER WAY TO FORK THE PAGERS
-
-  //Borrowing this technique from Dr. Homer's Phase 4 skeleton code
-
   char buf[10];
   for (i = 0; i < NUM_PAGERS; i++) {
     sprintf(buf, "%d", i); // Why not tell the pager which one it is?
     pagerID[i] = fork1("PagerDaemon", Pager, buf, USLOSS_MIN_STACK, PAGER_PRIORITY);
-  }
-
-  */
-    
-  /*
-  for(int i = 0; i < pagers; i++) {
-    if(i == 0) {
-       pager0ID = fork1("pager0", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
-    }
-    if(i == 1) {
-      pager1ID = fork1("pager1", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
-    }
-    if(i == 2) {
-      pager2ID = fork1("pager2", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);   
-    }
-    if(i == 3) {
-      pager3ID = fork1("pager3", Pager, NULL, USLOSS_MIN_STACK, PAGER_PRIORITY);
-     }      
-   }
-  */
+  } // Borrowed from Dr. Homer's Phase 4 skeleton code
 
   //>>> Phase 7 - Zero out, then initialize vmStats structure
   memset((char *) &vmStats, 0, sizeof(VmStats));
@@ -374,68 +359,62 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
 } // Ends Function vmInitReal
 
 
-/*
- *----------------------------------------------------------------------
- *
- * FaultHandler
- *
- * Handles an MMU interrupt. Simply stores information about the
- * fault in a queue, wakes a waiting pager, and blocks until
- * the fault has been handled.
- *
- * Results:
- * None.
- *
 
-  > int  type == USLOSS_MMU_INT
-  > void *arg == Offset within VM region
+/*----------------------------------------------------------------------
+|>>> Interrupt Handler FaultHandler
++-----------------------------------------------------------------------
+| Purpose: Handles a MMU Interrupt event via the following algorithm...
+|           
+| Algo:    1) Does validity assertion checks (inherited from skeleton)
+|          2) Stores information about the fault in the FaultMsg struct
+|             associated with the PID of currently executing process. In
+|             particular, informs the FaultMsg:
+|               A) The PID of the requesting process
+|               B) The Memory Offset from vmRegion of the request
+|          3) Sends a message to the pagerBox mailbox. A waiting Pager
+|             Daemon will at some point attempt to block (or has been
+|             blocked waiting) on pagerBox and will service the request.
+|             This could block the process until an available pager can
+|             service the request - but the internal mailbox system will
+|             then manifest a 'waitingSenders' queue.
+|          4) The pager servicing the request will awaken the process
+|             via process' mailbox ID when it completes the request.
+|
+| Parms:   > int  type == USLOSS_MMU_INT
+|          > void *arg == Offset within VM region
+|
+| Effects: > Populates a FaultMsg struct, adds request to pagerBox
+|          > The current process is blocked until the fault is handled.
+|
+| Returns: Nothing, and this helped affirm my intuition that the way in
+|          which the 'synchronization' between the Fault Handler and the
+|          Pager Daemons was explained in the spec and documentation was 
+|          unclear, and worse - potentially misleading.
++---------------------------------------------------------------------*/
+static void FaultHandler(int  type , void *arg){
+  int cause;
+  int offset = (int) (long)arg;
+  int pid = getpid();
 
-
- * Side effects:
- * The current process is blocked until the fault is handled.
- *
- *----------------------------------------------------------------------
- */
-
-int tester = 0;
-static void FaultHandler(int type ,void *arg){
-  //USLOSS_Console("FaultHandler was called\n");
-  int temp = processes[getpid()%MAXPROC].procBox;
-
-
-  //MboxReceive(temp, NULL, MAX_MESSAGE);
-
-  int ag = (int) ((long) arg);
-
-
-
-  // int temp2 = USLOSS_MmuGetCause(); // <<< Cause Code 1 == USLOSS_MMU_FAULT == Address was in unmapped page
+  //>>> Phase 1 - Perform validity assertion (Homer's Code via skeleton)
+  assert(type == USLOSS_MMU_INT);
+  cause = USLOSS_MmuGetCause();
+  assert(cause == USLOSS_MMU_FAULT);
+  vmStats.faults++;
   
+  //>>> Phase 2  - Create a new message to send to Pager Daemon
+  faults[pid%MAXPROC].pid = pid;
+  faults[pid%MAXPROC].addr = vmRegion + offset;
+   
+  //>>> Phase 3 - Send the Message, PID as the key
+  int msg = pid; // XTODO - Might not need this
+  MboxSend(pagerBox, &msg, sizeof(msg));
 
-  int temp2 = USLOSS_MmuMap(1, 0, 1, USLOSS_MMU_PROT_RW);
-  USLOSS_Console("return val of MmuMap == %d\n", temp2 );
+  //>>> Phase 4 - Block on the procss' private mailbox
+  MboxReceive(faults[pid%MAXPROC].procBox, NULL, 0);
 
+} // Ends Interrupt Handler FaultHandler
 
-  USLOSS_MmuSetAccess(1, USLOSS_MMU_REF);
-  USLOSS_Console("cause == %d\n", USLOSS_MmuGetCause() );
-  
-  tester++; if(tester == 10){USLOSS_Halt(0);}
-
-  //int cause;
-
-  //int offset = (int) (long) arg;
-
-  //assert(type == USLOSS_MMU_INT);
-  //cause = USLOSS_MmuGetCause();
-  //assert(cause == USLOSS_MMU_FAULT);
-  //vmStats.faults++;
-
-   /*
-    * Fill in faults[pid % MAXPROC], send it to the pagers, and wait for the
-    * reply.
-    */
-
-} /* FaultHandler */
 
 /*
  *----------------------------------------------------------------------
@@ -541,8 +520,10 @@ void vmDestroyReal(void){
   USLOSS_Console("frames: %d\n", vmStats.frames);
   USLOSS_Console("blocks: %d\n", vmStats.diskBlocks);
 
-} // Ends Function vmDestroyReal
+  // We no longer have an initialized MMU / VM Subsystem! 
+  VM_INIT = 0;
 
+} // Ends Function vmDestroyReal
 
 /*----------------------------------------------------------------------
 |>>> Function PrintStats
