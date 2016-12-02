@@ -1,4 +1,3 @@
-
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -14,9 +13,10 @@ extern int VM_INIT;
 extern int NUM_PAGES;
 extern Process processes[MAXPROC];
 
-void
-p1_fork(int pid)
-{
+
+
+//>>> Looks ok, same as I was thinking, add inits of PTE attributes as needed
+void p1_fork(int pid){
 
     // check VM_INIT to see if you need to assign a page table to this process
     if (VM_INIT) {
@@ -35,24 +35,56 @@ p1_fork(int pid)
             processes[pid].pageTable[i].diskBlock = -1;
         }
     }
+} // Ends Function p1_fork
 
-    if (DEBUG && debugflag)
-        USLOSS_Console("p1_fork() called: pid = %d\n", pid);
-} /* p1_fork */
+// Will need additional steps once DiskTable and FrameTable have been created
+void p1_quit(int pid){
+  // Per normal - execute only if VM_INIT has occured
+  if(VM_INIT){
 
-void
-p1_switch(int old, int new)
-{
+    // Inform Disk Table that all disk blocks owned by this process can be used
+    // (XTODO-TBD)
 
-    // TODO actually do the unmapping of old and mapping of new
+    // Inform Frame Table that all frames owned by this process are available
+    // (XTODO-TBD)
 
-    if (DEBUG && debugflag)
-        USLOSS_Console("p1_switch() called: old = %d, new = %d\n", old, new);
-} /* p1_switch */
+    // Free the Page Table
+    free(processes[pid].pageTable);
+  }
+} // Ends Function p1_quit
 
-void
-p1_quit(int pid)
-{
-    if (DEBUG && debugflag)
-        USLOSS_Console("p1_quit() called: pid = %d\n", pid);
-} /* p1_quit */
+// Needs a little more work...
+void p1_switch(int old, int new){
+  // Per normal - execute only if VM_INIT has occured
+  if(VM_INIT){
+
+    // Perform an unmap of the old Process
+    for (int i = 0; i < NUM_PAGES; i++) {
+
+      // If the old process i'th Page is in a frame
+
+      // Do a memcpy of the frame 
+
+      // Do a USLOSS_MmuUnmap call
+
+    } // Ends Unmapping of Old Process
+
+    // Perform a map of the new Process
+    for (int i = 0; i < NUM_PAGES; i++) {
+
+      // If new process i'th page is in a frame
+
+      // Do a USLOSS_MmuMap call
+
+      // Will also need to update the access bit
+      // via USLOSS_MmuSetAccess, but unsure how
+      // as of now...
+
+    } // Ends Unmapping of Old Process    
+
+    // Inform VM Stats that a context switch has occured
+    vmStats.switches++;
+
+  } // Ends VM_INIT==TRUE conditional implementation
+  USLOSS_Console("p1_switch() has completed\n");
+} // Ends Function p1_switch

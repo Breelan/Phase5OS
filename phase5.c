@@ -153,30 +153,6 @@ int start4(char *arg) {
   systemCallVec[SYS_VMINIT]    = vmInit;
   systemCallVec[SYS_VMDESTROY] = vmDestroy;
 
-  //####################################################################
-  //>>> CONSTRUCTION ZONE, ALL CODE ABOVE AND BELOW LOOKS OKAY
-
-    int temp;
-
-    for (int i = 0; i < MAXPROC; i++){
-      Mbox_Create(0, MAX_MESSAGE, &temp);
-      processes[i].procBox = temp;
-    }
-
-    /* initialize the Disk Table */
-
-    // get information about disk1
-    int numSectors;
-    int numTracks;
-    int diskSize;
-
-    DiskSize(1, &numSectors, &numTracks, &diskSize);
-
-    // allocate memory for DiskTable
-    DiskTable = (int *)malloc(numTracks * numSectors * sizeof(DTE));
-
-  //####################################################################
-
   // Spawn start5, then wait for it to terminate (compressing code to save lines)
   result = Spawn("Start5", start5, NULL, 8*USLOSS_MIN_STACK, PAGER_PRIORITY, &pid);
   if(result != 0){USLOSS_Console("start4(): Error spawning start5\n");Terminate(1);}
@@ -325,6 +301,23 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
     pagerID[i] = fork1("PagerDaemon", Pager, buf, USLOSS_MIN_STACK, PAGER_PRIORITY);
   } // Borrowed from Dr. Homer's Phase 4 skeleton code
 
+
+      /* initialize the Disk Table */
+
+    // get information about disk1
+    int numSectors;
+    int numTracks;
+    int diskSize;
+
+    diskSizeReal(1, &numSectors, &numTracks, &diskSize);
+
+    // allocate memory for DiskTable
+    DiskTable = (int *)malloc(numTracks * numSectors * sizeof(DTE));
+
+
+
+
+
   //>>> Phase 7 - Zero out, then initialize vmStats structure
   memset((char *) &vmStats, 0, sizeof(VmStats));
   vmStats.pages      = pages;
@@ -347,8 +340,8 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
      > Track  pointer filled in with number of sectors in a track
      > Disk   pointer filled in with number of tracks in the disk.
   */
-  vmStats.diskBlocks = 32; // DO A DISK SIZE REAL CALL HERE??? 
-  vmStats.freeDiskBlocks = 32; // 
+  vmStats.diskBlocks = diskSize; // DO A DISK SIZE REAL CALL HERE??? 
+  vmStats.freeDiskBlocks = diskSize; // 
 
 
   //>>> TEMP - Set up sample mapping in MMU
@@ -456,6 +449,11 @@ Pager(char *buf)
        // convert string to int and get the pid of the requesting process
        int frameId = atoi(buf);
 
+       //USLOSS_Console("yolo = %s\n", buf);
+
+       //>>> If it gets -1, is VmDestroyReal killing it - do thusly...
+      if(frameId == -1){quit(1);}
+
        // get the faultmsg associated with the pid
        FaultMsg msg = faults[frameId];
 
@@ -537,9 +535,21 @@ void vmDestroyReal(void){
   //>>> Phase 1 - Call USLOSS_MmuDone
   USLOSS_MmuDone();
 
-  //>>> Phase 2 - Kill the Pagers
+  char yolo[1];
 
-  //>>> Phase 3 - Free malloced structures 
+  sprintf(yolo, "%d", -1);
+
+
+  //>>> Phase 2 - Kill the Pagers
+  int status;
+  for (int i = 0; i < NUM_PAGERS; i++){
+    MboxSend(pagerBox, yolo, sizeof(int));
+    join(&status);
+  }
+
+  //>>> Phase 3 - Free malloced structures
+
+  // X-TODO Actually freaking do this
 
   //>>> Phase 4 - Print VM Stats (Not mentioned in spec - but its in your skeleton code so...)
 
