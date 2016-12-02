@@ -82,9 +82,7 @@ void p1_switch(int old, int new){
 
     } // Ends Unmapping of Old Process    
 
-    // Inform VM Stats that a context switch has occured
-    vmStats.switches++;
-
   } // Ends VM_INIT==TRUE conditional implementation
-  USLOSS_Console("p1_switch() has completed\n");
+  // Inform VM Stats that a context switch has occured
+  vmStats.switches++;
 } // Ends Function p1_switch

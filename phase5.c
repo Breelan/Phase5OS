@@ -7,13 +7,21 @@
 |  Instructor:  Patrick Homer
 |  Purpose:     Implements Phase 5
 +-----------------------------------------------------------------------
- >>>>>>>>>>>>>>>>>>>> OPERATION TOTALITY UNISPHERE <<<<<<<<<<<<<<<<<<<<
+| >>>>>>>>>>>>>>>>>>>> OPERATION TOTALITY UNISPHERE <<<<<<<<<<<<<<<<<<<<
+|
+| Domine Jesu Christe, Rex gloriae! Rex gloriae! Libera animas omniurn
+| fidelium defunctorum de poenis inferni, et de prof undo lacu: Libera 
+| cas de ore leonis, ne absorbeat eas tartarus, ne cadant in obscurum. 
+| Sed signifer sanctus Michael repraesentet eas in lucem sanctam, quam 
+| olim Abrahae promisisti et semini ejus. 
+|
+| Sanctus! Sanctus! Sanctus! Dominus Deus Sabaoth! Pleni suni coeli et 
+| terra gloria tua. Osanna in excelsis!
++-----------------------------------------------------------------------
 
 Notes:
 
- > XTODO: Relocate function definitions to Phase5.h before turnin
- > XTODO: Utilization of Assert and Abort functions???
-
+ > XTODO: might not need definition of vmRegion anymore
 
 +=====================================================================*/
 #include <assert.h>
@@ -24,6 +32,7 @@ Notes:
 #include <phase5.h>
 #include <usyscall.h>
 #include <libuser.h>
+#include <libuser.c>
 #include <vm.h>
 #include <string.h>
 // Will probably need these two at some point...
@@ -63,7 +72,7 @@ extern void mbox_condreceive(systemArgs *args_ptr);
 |                    VmInit, and will be used to indicate how many Pager
 |                    Daemons the system uses, which can be <MAXPAGERS
 |
-----------------------------------------------------------------------*/
++---------------------------------------------------------------------*/
 
 // Data Structures _____________________________________________________
 Process processes[MAXPROC]; // Phase 5 Process Table
@@ -80,7 +89,10 @@ int            NUM_PAGES;          // Number of Pages
 int            NUM_MAPPINGS;       // Number of Mappings
 int            NUM_FRAMES;         // Number of Frames
 int            NUM_PAGERS;         // Number of Pager Daemons
-void           *VM_REGION;          // Where vmRegion starts
+int            NUM_SECTORS;        // Used for vmInitReal
+int            NUM_TRACKS;         // Used for vmInitReal
+int            DISK_SIZE;          // Used for vmInitReal
+void           *VM_REGION;         // Where vmRegion starts
 
 // Misc. / 'In a Rush' Added ___________________________________________
 int *          DiskTable;          // Current state of Disk 1
@@ -89,7 +101,7 @@ int            VM_INIT;            // Informs if VmInit has completed
 
 
 /*----------------------------------------------------------------------
-|>>> Interrupt and Syscall Declarations
+|>>> Function Declarations
 +-----------------------------------------------------------------------
 | Implementation Notes:
 |
@@ -97,51 +109,33 @@ int            VM_INIT;            // Informs if VmInit has completed
 | > vmInit is installed into the Syscall Vector via start4
 | > vmDestroy is installed into the Syscall Vector via start4
 +---------------------------------------------------------------------*/
-static void FaultHandler(int  type, void *arg); // MMU Interrupt Handler
-static void vmInit(systemArgs *sysargsPtr);     // Syscall Handler
-void        *vmInitReal(int mappings, int pages, int frames, int pagers);
-static void vmDestroy(systemArgs *sysargsPtr);  // Syscall Handler
-
-
-/*----------------------------------------------------------------------
-|>>> Util Function and Process Declarations
-+-----------------------------------------------------------------------
-| Implementation Notes:
-|
-| > x
-+---------------------------------------------------------------------*/
-void        PrintStats(void); // Prints the VmStats Struct Attributes
-static int  Pager(char *buf); // Implements the Pager Process
-void        clockAlgo();      // Placeholder for the Clock Algorithm
-
-
-
-
-
+static void FaultHandler(int  type, void *arg);
+static void vmInit(systemArgs *sysargsPtr);
+static void vmDestroy(systemArgs *sysargsPtr);
+static int  Pager(char *buf);
+void        *vmInitReal(int m, int p, int f, int pd);
+void        vmDestroyReal(void); 
+void        clockAlgo();
 
 
 /*----------------------------------------------------------------------
 |>>> Function start4
 +-----------------------------------------------------------------------
-| Purpose: > Initializes the VM system call handlers
-|          > Initializes the Phase 5 Process Table
-|          > Spawns the start5 'Entry Point' Process
-|
+| Purpose: User Process that initializes VM system call handlers, the 
+|          Phase 5 Process Table, gets information about the Disk, and
+|          spawns start5 'Entry Point' process (as used for testing)
 | Parms:   char *arg - Process Argument per normal
-|
-| Effects: > Results    - MMU Return Status
-|          > Systemwide - The MMU is initialized
-|
+| Effects: Systemwide - See 'Purpose' above
 | Returns: Technically nothing, as it calls Terminate
 +---------------------------------------------------------------------*/
 int start4(char *arg) {
   // Used for Spawn and Wait calls per usual
   int pid; int result; int status;
 
-  // Indicate VmInit has not completed (might not need, but keeping!)
+  // Initialize/indicate that VmInit has not completed
   VM_INIT = 0;
 
-  // XTODO - Still not sure why these are needed, but here they are!
+  // (Via Homer) To get user-process access to mailbox functions
   systemCallVec[SYS_MBOXCREATE]      = mbox_create;
   systemCallVec[SYS_MBOXRELEASE]     = mbox_release;
   systemCallVec[SYS_MBOXSEND]        = mbox_send;
@@ -149,16 +143,25 @@ int start4(char *arg) {
   systemCallVec[SYS_MBOXCONDSEND]    = mbox_condsend;
   systemCallVec[SYS_MBOXCONDRECEIVE] = mbox_condreceive;
 
-  // Install the Syscall Vector members for vmInit/vmDestroy
-  systemCallVec[SYS_VMINIT]    = vmInit;
-  systemCallVec[SYS_VMDESTROY] = vmDestroy;
+  // Install Syscall Vector Handlers for vmInit/vmDestroy
+  systemCallVec[SYS_VMINIT]          = vmInit;
+  systemCallVec[SYS_VMDESTROY]       = vmDestroy;
+
+  // Initialize Process Table per normal (with values as suggested by Dr. Homer)
+  for(int i = 0; i<MAXPROC; i++){
+    processes[i].numPages  = -1;
+    processes[i].pageTable = NULL;
+  }
+
+  // Get information about the Disk
+  DiskSize(1, &NUM_SECTORS, &NUM_TRACKS, &DISK_SIZE);
 
   // Spawn start5, then wait for it to terminate (compressing code to save lines)
   result = Spawn("Start5", start5, NULL, 8*USLOSS_MIN_STACK, PAGER_PRIORITY, &pid);
   if(result != 0){USLOSS_Console("start4(): Error spawning start5\n");Terminate(1);}
   result = Wait(&pid, &status);
   if(result != 0){USLOSS_Console("start4(): Error waiting for start5\n");Terminate(1);}
-  Terminate(0);
+  Terminate(0); // The non-erroneous call of Terminate
   return 0; // Should never reach here, but makes GCC happy per usual
 } // Ends Process start4
 
@@ -178,7 +181,6 @@ int start4(char *arg) {
 | Returns: Nothing
 +---------------------------------------------------------------------*/
 static void vmInit(systemArgs *args){
-
   CheckMode(); // Kernel Mode Check
 
   //>>> Phase 1 - Unpack systemArgs arguments
@@ -195,14 +197,12 @@ static void vmInit(systemArgs *args){
     args->arg4 = (void *)((long) -1);
     return;
   }
-
   // Check 2: VM Region can only be initialized once
   if(VM_INIT == 1) {
     USLOSS_Console("vm region already initialized!\n");
     args->arg4 = (void *)((long) -2);
     return;
   }
-
   // Check 3: Mappings should equal pages
   if(mappings != pages) {
     USLOSS_Console("mappings do not equal pages!\n");
@@ -211,9 +211,6 @@ static void vmInit(systemArgs *args){
   }
 
   //>>> Phase 3 - Call vmInitReal to initialize VM Subsystem
-  // XTODO - Couldn't we directly assign return of vmInitReal to arg1 ???
-  // XTODO - I am also suspecting that maybe we have to do a local assignment 
-  //         of vmRegion = result as well. Asked for clarification on Piazza
   int result = (int) (long)vmInitReal(mappings, pages, frames, pagers);
 
   // Result should hold address of first byte in VM region
@@ -226,16 +223,30 @@ static void vmInit(systemArgs *args){
 /*----------------------------------------------------------------------
 |>>> Function vmInitReal
 +-----------------------------------------------------------------------
-
- * Called by vmInit.
- * Initializes the VM system by configuring the MMU and setting
- * up the page tables.
- *
- * Results:
- *      Address of the VM region.
- *
- * Side effects:
- *      The MMU is initialized.
+| Purpose: Called by vmInit, this function performs several operations
+|          encompassing the initialization of the VM Subsystem:
+|
+|          1) Configure and initialize the MMU via a USLOSS_MmuInit call
+|          2) Install the FaultHandler which handles MMU Interrupts
+|          3) Pre-Initialize the Page Tables with values (Via Dr. Homer)
+|          4) Initialize the Frame Table (XTODO-TBD)
+|          5) Initialize the faults FaultMsg Data Structure Array
+|          6) Define pagerBox - the Pager Wait/Service Mailbox
+|          7) Initialize (fork) the Pager Daemons
+|          8) Initialize the vmStats VM Subsystem Statistics
+|          9) Get and return vmRegion address via USLOSS_MmuRegion call
+|         
+| Parms:   > int mappings = How many mappings for this VM System?
+|          > int pages    = How many pages for this VM System?
+|          > int frames   = How many frames for this VM System?
+|          > int pagers   = How many Pager Daemons for this VM System?
+|
+| Effects: All aforementioned data structures and variables are either
+|          assigned and/or initialized. MMU Subsystem is considered
+|          initialized on the return of this function, ergo VM_INIT is
+|          assigned to '1' before this function returns.
+|
+| Returns: The address of the VM Region i.e. vmRegion
 +-----------------------------------------------------------------------
 | Implementation Notes: 
 | 
@@ -243,17 +254,21 @@ static void vmInit(systemArgs *args){
 |    o aProcess.state     = UNUSED;
 |    o aProcess.frame     = -1 (becaue memory can have a 0th frame)
 |    o aProcess.diskBlock = -1 (because disk can have a 0th block)
- *
-
+|
+| > Initializing FaultMsg Private Mailboxes: We can assign a 'permanent' 
+|   mailbox versus 'swapping mailboxes' with each P1_Fork call on the 
+|   guarantee that the Pager will always do a send on a fault member's
+|   replyBox, thus resetting its state before said process can ever 
+|   unblock and quit, else an error has occured outside Phase 5's scope.
+|
+|
 +---------------------------------------------------------------------*/
 void * vmInitReal(int mappings, int pages, int frames, int pagers){
-
   CheckMode(); // Kernel Mode Check
 
-  int status;
-  int dummy;
-  int pid;
-  int i = 0; // Used for loops (C-99 habit I've developed!)
+  int status; // Used to get USLOSS_Mmu... return values
+  int dummy;  // Used to pass addresses into function calls
+  int i = 0;  // Used for loops (C-99 habit I've developed!)
 
   //>>> Phase 1 - Assign MMU Settings to globals, each is valid at this point
   NUM_MAPPINGS = mappings;
@@ -281,10 +296,7 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
   //>>> Phase 5 - Initialize Frame Table (TBD)
 
 
-  //>>> Phase 6 - Create Fault Mailboxes
-  // XTODO - I THINK THIS MEANS THE BOXES IN faults[MAXPROC]
-
-  // Note: Can assign permanent mailbox on guarantee that Pager will always do a send on a box
+  //>>> Phase 6 - Initialize FaultMsg structs, create FaultMsg Mailboxes
   for (int i = 0; i < MAXPROC; i++){
     faults[i].pid = -1;
     faults[i].addr  = NULL;
@@ -294,61 +306,33 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
   //>>> Phase 7 - Create the Pager Daemon 'Requests Mailbox / Queue'
   pagerBox = MboxCreate(pagers, MAX_MESSAGE);
 
-  //>>> Phase 6 - Fork the Pager Daemons, store pager pids in global variables.
+  //>>> Phase 8 - Fork the Pager Daemons, store pager pids in global variables.
   char buf[10];
   for (i = 0; i < NUM_PAGERS; i++) {
     sprintf(buf, "%d", i); // Why not tell the pager which one it is?
     pagerID[i] = fork1("PagerDaemon", Pager, buf, USLOSS_MIN_STACK, PAGER_PRIORITY);
   } // Borrowed from Dr. Homer's Phase 4 skeleton code
 
+  //>>> Phase 9 - Allocate and initialize DiskTable
 
-      /* initialize the Disk Table */
+  // allocate memory for DiskTable
+  DiskTable = (int *)malloc(NUM_TRACKS * NUM_SECTORS * sizeof(DTE));
 
-    // get information about disk1
-    int numSectors;
-    int numTracks;
-    int diskSize;
-
-    diskSizeReal(1, &numSectors, &numTracks, &diskSize);
-
-    // allocate memory for DiskTable
-    DiskTable = (int *)malloc(numTracks * numSectors * sizeof(DTE));
-
-
-
-
-
-  //>>> Phase 7 - Zero out, then initialize vmStats structure
+  //>>> Phase 10 - Zero out, then initialize vmStats structure
   memset((char *) &vmStats, 0, sizeof(VmStats));
-  vmStats.pages      = pages;
-  vmStats.frames     = frames;
-  vmStats.freeFrames = frames;
-  vmStats.switches   = 10;     // Placeholder - should be 0 (zero)
-  vmStats.faults     = 0;      // Placeholder - should be 0 (zero)
-  vmStats.new        = 1;      // Placeholder - should be 0 (zero)  
-  vmStats.pageIns    = 0;
-  vmStats.pageOuts   = 0;
-  vmStats.replaced   = 0;
+  vmStats.pages          = pages;
+  vmStats.frames         = frames;
+  vmStats.freeFrames     = frames;
+  vmStats.switches       = 0;
+  vmStats.faults         = 0;
+  vmStats.new            = 1;      // Placeholder - should be 0 (zero)  
+  vmStats.pageIns        = 0;
+  vmStats.pageOuts       = 0;
+  vmStats.replaced       = 0;
+  vmStats.diskBlocks     = DISK_SIZE;
+  vmStats.freeDiskBlocks = DISK_SIZE;
 
-  /* XTODO: I think we need to do a diskSizeReal call here. From the Phase 4 Spec - 
-
-     > int diskSizeReal(int unit, int *sector, int *track, int *disk)
-
-     > Returns information about the size of the disk indicated by unit. 
-
-     > Sector pointer filled in with number of bytes in a sector
-     > Track  pointer filled in with number of sectors in a track
-     > Disk   pointer filled in with number of tracks in the disk.
-  */
-  vmStats.diskBlocks = diskSize; // DO A DISK SIZE REAL CALL HERE??? 
-  vmStats.freeDiskBlocks = diskSize; // 
-
-
-  //>>> TEMP - Set up sample mapping in MMU
-  // status = USLOSS_MmuMap(TAG, 0, 0, USLOSS_MMU_PROT_RW);
-  //####################################################################
-
-  //>>> Phase 8 - Assign VM_INIT to 1, Return address of VM Region
+  //>>> Phase 11 - Assign VM_INIT to 1, Return address of VM Region
   VM_INIT = 1; 
   VM_REGION = USLOSS_MmuRegion(&dummy);
   return VM_REGION;
@@ -432,6 +416,9 @@ static int
 Pager(char *buf)
 {
     int status;
+
+    // XTODO - TEMPORARY, shuts up 'status declared but not used' GCC error for now
+    if(status == 0){;}
 
     while(1) {
       
@@ -519,8 +506,8 @@ static void vmDestroy(systemArgs *args){
 |             one by one in a loop. Following each message send will be
 |             a call of join - this will block vmDestroyReal until the
 |             corresponding Pager process terminates and quits, which
-|             guarantees that all Pager processes will have quit when
-|             vmDestroyReal returns.
+|             guarantees via the  Phase 1 layer that all Pager processes
+|             will have quit when vmDestroyReal returns.
 |
 |          4) Frees malloced Data Structures. At the present time, this
 |             may include each Process' Page Table, th Frame Table, the
@@ -532,18 +519,15 @@ static void vmDestroy(systemArgs *args){
 void vmDestroyReal(void){
   CheckMode(); // Are we in Kernel Mode?
 
-  //>>> Phase 1 - Call USLOSS_MmuDone
-  USLOSS_MmuDone();
+  int status;   // Used to make join call happy because it needs int pointer
+  char mess[1]; // Used with sprintf to send integer value passed into message
 
-  char yolo[1];
+  // Encode int value -1 into special message
+  sprintf(mess, "%d", -1);
 
-  sprintf(yolo, "%d", -1);
-
-
-  //>>> Phase 2 - Kill the Pagers
-  int status;
+  // Kill the Pagers
   for (int i = 0; i < NUM_PAGERS; i++){
-    MboxSend(pagerBox, yolo, sizeof(int));
+    MboxSend(pagerBox, mess, sizeof(int));
     join(&status);
   }
 
@@ -551,19 +535,11 @@ void vmDestroyReal(void){
 
   // X-TODO Actually freaking do this
 
-  //>>> Phase 4 - Print VM Stats (Not mentioned in spec - but its in your skeleton code so...)
-
+  // Print VM Stats (not sure if we need to as test results complain, so commenting out for now)
   //PrintStats(); // Might not be what Homer did
 
-  // Keeping these in case Homer wants to print these 4 and not call PrintStats
-  // USLOSS_Console("vmStats:\n");
-  // USLOSS_Console("pages: %d\n", vmStats.pages);
-  // USLOSS_Console("frames: %d\n", vmStats.frames);
-  // USLOSS_Console("blocks: %d\n", vmStats.diskBlocks);
-
-  // We no longer have an initialized MMU / VM Subsystem! 
-  VM_INIT = 0;
-
+  USLOSS_MmuDone(); // Make it official...call USLOSS_MmuDone
+  VM_INIT = 0;      // We no longer have a MMU/VM Subsystem
 } // Ends Function vmDestroyReal
 
 /*----------------------------------------------------------------------

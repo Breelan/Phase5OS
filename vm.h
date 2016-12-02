@@ -1,35 +1,87 @@
-/*
- * vm.h
- */
+/*======================================================================
+|  USLOSS Project - Phase 5 : vm.h
++-----------------------------------------------------------------------
+|  Author:      Steven Eiselen | Breelan Lubers
+|  Language:    C utilizing USLOSS
+|  Class:       CSC 452 Fall 2016
+|  Instructor:  Patrick Homer
+|  Purpose:     Defines Data Structures and Constants used with/by the
+|               Virtual Memory Subsystem for the Phase 5 Implementation
++=====================================================================*/
 
-
-/*
- * All processes use the same tag.
- */
+/*----------------------------------------------------------------------
+|>>> Tag - All processes use the same tag
++---------------------------------------------------------------------*/
 #define TAG 0
 
-/*
- * Different states for a page.
- */
+/*----------------------------------------------------------------------
+|>>> Different States for a Page
++-----------------------------------------------------------------------
+| > USUSED - the page is not used
+| > INCORE - the page is in in a frame (i.e. in 'core' memory)
+
+  XTODO - MORE???
+
++---------------------------------------------------------------------*/
 #define UNUSED 500
-#define INCORE 501 // assigned to a frame
-/* You'll probably want more states */
+#define INCORE 501
+
+/*----------------------------------------------------------------------
+|>>> Different States for a Frame
++---------------------------------------------------------------------*/
 #define DIRTY  1
 #define CLEAN  0
 
 
-/*
- * Page table entry.
-   Via Homer - Should NOT need additional information outside what is in skeleton
- */
+/*----------------------------------------------------------------------
+|>>> Structure PTE - Page Table Entry
++-----------------------------------------------------------------------
+| Purpose: Models a Virtual Memory Page Table Entry. Attributes include
+|          the state of a page, the frame that stores the page (if any),
+|          and the disk block that stores the page (if any).
+|
+| Notes:   A) Additional Attributes - Dr. Homer mentioned in class that
+|             there is no need for any additional attributes outside of
+|             the three already provided in the skeleton code.
+|
+|          B) Attribute Purpose/Values:
+|              > state =     state of the PTE (see state defs above)
+|              > frame =     frame that stores the page, else -1 if none
+|              > diskBlock = disk block that stores the page, -1 if none          
++---------------------------------------------------------------------*/
 typedef struct PTE {
-    int  state;      // See above.
-    int  frame;      // Frame that stores the page (if any). -1 if none.
-    int  diskBlock;  // Disk block that stores the page (if any). -1 if none.
-    // Add more stuff here >>> XTODO - Dont think these 2 are needed, they are in MMU System
-    int  dirtyBit;   // Examine this bit to see if PTE is dirty or not
-    int referenceBit; // ??? needed? or is this the same as state?
+  int  state;
+  int  frame;
+  int  diskBlock;
 } PTE;
+
+
+/*----------------------------------------------------------------------
+|>>> Structure FTE - Frame Table Entry
++-----------------------------------------------------------------------
+| Purpose: Models a Frame Table Entry...
+|
+| Notes:   A) x
+|
+|          B) Attribute Purpose/Values:
+|              > state =     state of the PTE (see state defs above)
+|              > frame =     frame that stores the page, else -1 if none
+|              > diskBlock = disk block that stores the page, -1 if none          
++---------------------------------------------------------------------*/
+typedef struct FTE{
+  int owner;
+  int  dirtyBit;   // Examine this bit to see if PTE is dirty or not
+  int referenceBit; // ??? needed? or is this the same as state?
+}FTE;
+
+
+
+
+// Disk Table Entry
+typedef struct DTE {
+    int pid;         // Process that owns this sector
+    int page;        // Page # associated with this sector
+} DTE;
 
 /*
  * Per-process information.
@@ -51,18 +103,5 @@ typedef struct FaultMsg {
     int  replyMbox;  // Mailbox to send reply.
     // Add more stuff here.
 } FaultMsg;
-
-
-
-// Frame Table Entry
-typedef struct FTE{
-  int owner;
-}FTE;
-
-// Disk Table Entry
-typedef struct DTE {
-    int pid;         // Process that owns this sector
-    int page;        // Page # associated with this sector
-} DTE;
 
 #define CheckMode() assert(USLOSS_PsrGet() & USLOSS_PSR_CURRENT_MODE)
