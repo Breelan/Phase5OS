@@ -58,7 +58,8 @@ void p1_switch(int old, int new){
     for (int i = 0; i < NUM_PAGES; i++) {
 
       // If the old process i'th Page is in a frame
-
+      USLOSS_MmuUnmap(0, i);
+      
       // Do a memcpy of the frame 
 
       // Do a USLOSS_MmuUnmap call
@@ -69,8 +70,15 @@ void p1_switch(int old, int new){
     for (int i = 0; i < NUM_PAGES; i++) {
 
       // If new process i'th page is in a frame
+      for (int i = 0; i < NUM_PAGES; i++) {
+        if (processes[new%MAXPROC].pageTable[i].state == INCORE) {
 
-      // Do a USLOSS_MmuMap call
+          int frame = processes[new%MAXPROC].pageTable[i].frame;
+          
+          // Do a USLOSS_MmuMap call
+          USLOSS_MmuMap(TAG, i, frame, USLOSS_MMU_PROT_RW);
+        }
+      }
 
       // Will also need to update the access bit
       // via USLOSS_MmuSetAccess, but unsure how

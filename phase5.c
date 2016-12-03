@@ -464,7 +464,8 @@ static int Pager(char *buf){
       //>>> If it gets -1, is VmDestroyReal killing it - do thusly...
       if(pid == -2){quit(1);}
 
-      
+      // find a free frame
+      // TODO put this whole thing into the Clock Algorithm
       for(int i = 0; i<NUM_FRAMES ; i++){
         if (FrameTable[i].isUsed == UNUSED){
           frame = i;
@@ -472,18 +473,17 @@ static int Pager(char *buf){
         }
       }
 
-
-
+      // CLOCK ALGORITHM CALL HERE
 
       // get the faultmsg associated with the pid
       FaultMsg msg = faults[pid];
 
-       // Get the page #
-       int page = (int) (long)((faults[pid].addr)-(vmRegion))/NUM_PAGES;
+      // Get the page #
+      int page = (int) (long)((faults[pid].addr)-(vmRegion))/NUM_PAGES;
 
-
-       // do the mapping TODO move this to p1_switch
-       status = USLOSS_MmuMap(TAG, page, frame, USLOSS_MMU_PROT_RW);
+      // update the page table for the process
+      processes[pid%MAXPROC].pageTable[page].state = INCORE;
+      processes[pid%MAXPROC].pageTable[page].frame = frame;
 
        // wake up the faulting process
        MboxSend(faults[pid%MAXPROC].replyMbox, NULL, 0);
