@@ -20,17 +20,19 @@
 | > USUSED - the page is not used
 | > INCORE - the page is in in a frame (i.e. in 'core' memory)
 
-  XTODO - MORE???
-
 +---------------------------------------------------------------------*/
 #define UNUSED 500
 #define INCORE 501
+#define ONDISK 502
+#define ISUSED 503
 
 /*----------------------------------------------------------------------
 |>>> Different States for a Frame
 +---------------------------------------------------------------------*/
 #define DIRTY  1
 #define CLEAN  0
+#define ISREF  2
+#define UNREF  3
 
 
 /*----------------------------------------------------------------------
@@ -70,11 +72,11 @@ typedef struct PTE {
 +---------------------------------------------------------------------*/
 typedef struct FTE{
   int owner;
-  int  dirtyBit;   // Examine this bit to see if PTE is dirty or not
-  int referenceBit; // ??? needed? or is this the same as state?
+  int isUsed;
+  int page;
+  int isDirty;      // Examine this bit to see if PTE is dirty or not
+  int isReferenced; // ??? needed? or is this the same as state?
 }FTE;
-
-
 
 
 // Disk Table Entry
@@ -89,7 +91,7 @@ typedef struct DTE {
 typedef struct Process {
     int  numPages;   // Size of the page table.
     PTE  *pageTable; // The page table for the process.
-    int procBox; // Private mailbox for this process.
+    // Removed procBox, as associated FaultMsg takes care of this role
     // Add more stuff here */
 } Process;
 

@@ -89,13 +89,14 @@ int            NUM_PAGES;          // Number of Pages
 int            NUM_MAPPINGS;       // Number of Mappings
 int            NUM_FRAMES;         // Number of Frames
 int            NUM_PAGERS;         // Number of Pager Daemons
-int            NUM_SECTORS;        // Used for vmInitReal
-int            NUM_TRACKS;         // Used for vmInitReal
+int            SECTOR_SIZE;        // Used for vmInitReal
+int            TRACK_SIZE;         // Used for vmInitReal
 int            DISK_SIZE;          // Used for vmInitReal
 void           *VM_REGION;         // Where vmRegion starts
 
 // Misc. / 'In a Rush' Added ___________________________________________
-int *          DiskTable;          // Current state of Disk 1
+DTE *          DiskTable;          // Current state of Disk 1
+FTE *          FrameTable;
 int            VM_INIT;            // Informs if VmInit has completed
 
 
@@ -154,7 +155,7 @@ int start4(char *arg) {
   }
 
   // Get information about the Disk
-  DiskSize(1, &NUM_SECTORS, &NUM_TRACKS, &DISK_SIZE);
+  DiskSize(1, &SECTOR_SIZE, &TRACK_SIZE, &DISK_SIZE);
 
   // Spawn start5, then wait for it to terminate (compressing code to save lines)
   result = Spawn("Start5", start5, NULL, 8*USLOSS_MIN_STACK, PAGER_PRIORITY, &pid);
@@ -287,14 +288,31 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
   USLOSS_IntVec[USLOSS_MMU_INT] = FaultHandler;
 
   //>>> Phase 4 - Initialize Page Tables (see documentation for more info)
-  // for (int i = 0; i < MAXPROC; i++){
-  //   processes[i].PTE.state     = UNUSED;
-  //   processes[i].PTE.frame     = -1;
-  //   processes[i].PTE.diskBlock = -1;
-  // }
+  for(int i = 0; i < MAXPROC; i++){
+
+    // We just thought this might actually refer to how many pages the process is using
+    processes[i].numPages = 0;
+
+    // Create as many PTEs as there are numpages
+    processes[i].pageTable = (PTE*) malloc(NUM_PAGES * sizeof(PTE));
+
+    // Initialize the Page Table
+    for (int i = 0; i < NUM_PAGES; i++) {
+      processes[i].pageTable[i].state = UNUSED;
+      processes[i].pageTable[i].frame = -1;
+      processes[i].pageTable[i].diskBlock = -1;
+    } // Ends malloc and initialization of Page Table
+  } // Ends initialization of Process Table
 
   //>>> Phase 5 - Initialize Frame Table (TBD)
-
+  FrameTable = (FTE*) malloc(NUM_FRAMES * sizeof(FTE));
+  for (int i = 0; i < NUM_FRAMES; i++) {
+    FrameTable[i].owner        = -1;
+    FrameTable[i].isUsed       = UNUSED; 
+    FrameTable[i].page         = -1;
+    FrameTable[i].isDirty      = CLEAN;
+    FrameTable[i].isReferenced = UNREF;
+  } // Ends malloc and initialization of Frame Table
 
   //>>> Phase 6 - Initialize FaultMsg structs, create FaultMsg Mailboxes
   for (int i = 0; i < MAXPROC; i++){
@@ -314,9 +332,15 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
   } // Borrowed from Dr. Homer's Phase 4 skeleton code
 
   //>>> Phase 9 - Allocate and initialize DiskTable
+  DiskTable = (DTE*) malloc(DISK_SIZE * sizeof(DTE));
+  for(int i = 0; i < DISK_SIZE; i++){
+    DiskTable[i].pid  = -1; 
+    DiskTable[i].page = -1;    
+  }
 
-  // allocate memory for DiskTable
-  DiskTable = (int *)malloc(NUM_TRACKS * NUM_SECTORS * sizeof(DTE));
+  //USLOSS_Console("NUM_SECTORS = %d\n", SECTOR_SIZE);
+  //USLOSS_Console("NUM_TRACKS  = %d\n", TRACK_SIZE);  
+  //USLOSS_Console("DISK_SIZE   = %d\n", DISK_SIZE);    
 
   //>>> Phase 10 - Zero out, then initialize vmStats structure
   memset((char *) &vmStats, 0, sizeof(VmStats));
@@ -325,7 +349,7 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
   vmStats.freeFrames     = frames;
   vmStats.switches       = 0;
   vmStats.faults         = 0;
-  vmStats.new            = 1;      // Placeholder - should be 0 (zero)  
+  vmStats.new            = 1;      // XTODO Placeholder - should be 0 (zero)  
   vmStats.pageIns        = 0;
   vmStats.pageOuts       = 0;
   vmStats.replaced       = 0;
@@ -404,6 +428,15 @@ static void FaultHandler(int  type , void *arg){
  *
  * Kernel process that handles page faults and does page replacement.
  *
+  Homer's Algo:
+   > Wait for fault to occur (receive from mailbox) 
+   > Look for free frame 
+   > If there isn't one 
+       o then use clock algorithm to replace a page (perhaps write to disk) 
+   > Load page into frame from disk, if necessary 
+   > Unblock waiting (faulting) process 
+
+
  * Results:
  * None.
  *
@@ -412,56 +445,52 @@ static void FaultHandler(int  type , void *arg){
  *
  *----------------------------------------------------------------------
  */
-static int
-Pager(char *buf)
-{
-    int status;
+static int Pager(char *buf){
+  int status;
+  int frame;
+  int pid;
 
-    // XTODO - TEMPORARY, shuts up 'status declared but not used' GCC error for now
-    if(status == 0){;}
+  if(status == 0){;} // XTODO - TEMP, shuts up 'status declared but not used' GCC error for now
+
+  //USLOSS_Console("%d\n", NUM_FRAMES);
 
     while(1) {
+      // Prepare container for message
+      char buf[MAX_MESSAGE];
+      // Do receive on pagerBox  
+      MboxReceive(pagerBox, buf, MAX_MESSAGE);      
+      // convert string to int and get the pid of the requesting process
+      pid = atoi(buf);
+      //>>> If it gets -1, is VmDestroyReal killing it - do thusly...
+      if(pid == -2){quit(1);}
+
       
-        /* Wait for fault to occur (receive from mailbox) */
-        /* Look for free frame */
-        /* If there isn't one then use clock algorithm to
-         * replace a page (perhaps write to disk) */
-        /* Load page into frame from disk, if necessary */
-        /* Unblock waiting (faulting) process */
+      for(int i = 0; i<NUM_FRAMES ; i++){
+        if (FrameTable[i].isUsed == UNUSED){
+          frame = i;
+          break;
+        }
+      }
 
-       // block on mailbox
-       char buf[MAX_MESSAGE];
-       MboxReceive(pagerBox, buf, MAX_MESSAGE);
 
-       // convert string to int and get the pid of the requesting process
-       int frameId = atoi(buf);
 
-       //USLOSS_Console("yolo = %s\n", buf);
 
-       //>>> If it gets -1, is VmDestroyReal killing it - do thusly...
-      if(frameId == -1){quit(1);}
+      // get the faultmsg associated with the pid
+      FaultMsg msg = faults[pid];
 
-       // get the faultmsg associated with the pid
-       FaultMsg msg = faults[frameId];
+       // Get the page #
+       int page = (int) (long)((faults[pid].addr)-(vmRegion))/NUM_PAGES;
 
-       // get the frame number
-       int frame = ( ( (int) ((long)msg.addr)) - ((int) ((long)VM_REGION)))/ (NUM_FRAMES * 8);
-
-       // need to check the process' pages to see if we can use one
-       int page = 0;
-       for (int i = 0; i < processes[frameId].numPages; i++) {
-          if (processes[frameId].pageTable[i].state == UNUSED) {
-            page = i;
-          }
-       }
 
        // do the mapping TODO move this to p1_switch
        status = USLOSS_MmuMap(TAG, page, frame, USLOSS_MMU_PROT_RW);
 
        // wake up the faulting process
-       MboxSend(faults[frameId%MAXPROC].replyMbox, NULL, 0);
+       MboxSend(faults[pid%MAXPROC].replyMbox, NULL, 0);
 
     }
+
+
     return 0;
 } /* Pager */
 
@@ -499,7 +528,7 @@ static void vmDestroy(systemArgs *args){
 |
 |          2) Kills all Pager processes by sending them special messages
 |             which trigger them to terminate. At present, this message
-|             will be a PID of -1 (negative one), though we may change
+|             will be a PID of -2 (negative one), though we may change
 |             this in future development WLOG to the main intention.
 |
 |          3) Sends the aforementioned messages to the pager processes
@@ -513,17 +542,22 @@ static void vmDestroy(systemArgs *args){
 |             may include each Process' Page Table, th Frame Table, the
 |             Disk Table, and/or other structures as they come up.
 |
+
+>> INCLUDE NOTE OF FACT THAT WERE FOLLOWING HOMER'S SKELETON CODE ALGO
+
 | Parms:   None
 | Effects: Systemwide - The MMU is turned off
 +---------------------------------------------------------------------*/
 void vmDestroyReal(void){
   CheckMode(); // Are we in Kernel Mode?
 
+  VM_INIT = 0;      // We no longer have a MMU/VM Subsystem
+
   int status;   // Used to make join call happy because it needs int pointer
   char mess[1]; // Used with sprintf to send integer value passed into message
 
   // Encode int value -1 into special message
-  sprintf(mess, "%d", -1);
+  sprintf(mess, "%d", -2);
 
   // Kill the Pagers
   for (int i = 0; i < NUM_PAGERS; i++){
@@ -531,15 +565,17 @@ void vmDestroyReal(void){
     join(&status);
   }
 
-  //>>> Phase 3 - Free malloced structures
+  PrintStats(); // Might not be what Homer did
 
-  // X-TODO Actually freaking do this
+  // Free Stuff...
+  free(FrameTable);
+  free(DiskTable);
 
-  // Print VM Stats (not sure if we need to as test results complain, so commenting out for now)
-  //PrintStats(); // Might not be what Homer did
+  for(int i = 0; i < MAXPROC; i++){
+    free(processes[i].pageTable); 
+  } // Ends initialization of Process Table
 
   USLOSS_MmuDone(); // Make it official...call USLOSS_MmuDone
-  VM_INIT = 0;      // We no longer have a MMU/VM Subsystem
 } // Ends Function vmDestroyReal
 
 /*----------------------------------------------------------------------

@@ -15,30 +15,25 @@ extern Process processes[MAXPROC];
 
 
 
-//>>> Looks ok, same as I was thinking, add inits of PTE attributes as needed
+
+
 void p1_fork(int pid){
-
-    // check VM_INIT to see if you need to assign a page table to this process
-    if (VM_INIT) {
-
-        // initialize slot for process the process table
-        processes[pid].numPages = NUM_PAGES;
-        processes[pid].procBox = MboxCreate(0, MAX_MESSAGE); 
-
-        // create as many PTEs as there are numpages
-        processes[pid].pageTable = (PTE*) malloc(NUM_PAGES * sizeof(PTE));
-
-        // initialize the pages
-        for (int i = 0; i < NUM_PAGES; i++) {
-            processes[pid].pageTable[i].state = UNUSED;
-            processes[pid].pageTable[i].frame = -1;
-            processes[pid].pageTable[i].diskBlock = -1;
-        }
+  if(DEBUG==1){USLOSS_Console("In Function p1_fork\n");}
+  // check VM_INIT - if VM System initialized, (re-)initialize page table
+  if (VM_INIT) {
+    // Re-initialize the Page Table
+    for (int i = 0; i < NUM_PAGES; i++) {
+      processes[pid].pageTable[i].state = UNUSED;
+      processes[pid].pageTable[i].frame = -1;
+      processes[pid].pageTable[i].diskBlock = -1;
     }
+  }
 } // Ends Function p1_fork
+
 
 // Will need additional steps once DiskTable and FrameTable have been created
 void p1_quit(int pid){
+  if(DEBUG==1){USLOSS_Console("In Function p1_quit\n");}
   // Per normal - execute only if VM_INIT has occured
   if(VM_INIT){
 
@@ -55,8 +50,9 @@ void p1_quit(int pid){
 
 // Needs a little more work...
 void p1_switch(int old, int new){
+  if(DEBUG==1){USLOSS_Console("In Function p1_switch\n");}
   // Per normal - execute only if VM_INIT has occured
-  if(VM_INIT){
+  if(VM_INIT==1){
 
     // Perform an unmap of the old Process
     for (int i = 0; i < NUM_PAGES; i++) {
@@ -81,8 +77,7 @@ void p1_switch(int old, int new){
       // as of now...
 
     } // Ends Unmapping of Old Process    
-
+    vmStats.switches++;
   } // Ends VM_INIT==TRUE conditional implementation
   // Inform VM Stats that a context switch has occured
-  vmStats.switches++;
 } // Ends Function p1_switch
