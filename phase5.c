@@ -19,9 +19,11 @@
 | terra gloria tua. Osanna in excelsis!
 +-----------------------------------------------------------------------
 
-Notes:
-
- > XTODO: might not need definition of vmRegion anymore
+TTD Before turnin when everything works:
+ > XTODO: Might not need definition of vmRegion anymore
+ > XTODO: Skip simpleTest7 - does not work
+ > XTODO: Do valgrind test to make sure malloc works!
+ > XTODO: Look for the other TODO items
 
 +=====================================================================*/
 #include <assert.h>
@@ -62,8 +64,10 @@ extern void mbox_condreceive(systemArgs *args_ptr);
 |                    on whenever they execute a MMU Interrupt and block
 |                    pending completion of a Pager action via a message
 |
-| > void *vmRegion:  Dr. Homer recommended that we define the vmRegion
-|                    in this file, so that's what we'll do.
+| > void *vmRegion:  Defined local to resolve the extern vmRegion issue 
+|                    via the test cases. Dr. Homer advised us to define
+|                    vmRegion in this file, and redefined it as such in 
+|                    the new skeleton.c file, so that's what we'll do.
 |
 | > int pagerID:     The maximum number of Pager Daemons is defined by
 |                    USLOSS, ergo we can safely declare an array of such
@@ -72,6 +76,8 @@ extern void mbox_condreceive(systemArgs *args_ptr);
 |                    VmInit, and will be used to indicate how many Pager
 |                    Daemons the system uses, which can be <MAXPAGERS
 |
+
+
 +---------------------------------------------------------------------*/
 
 // Data Structures _____________________________________________________
@@ -98,6 +104,12 @@ void           *VM_REGION;         // Where vmRegion starts
 DTE *          DiskTable;          // Current state of Disk 1
 FTE *          FrameTable;
 int            VM_INIT;            // Informs if VmInit has completed
+int            clockHand;
+
+// TEMP MUTEX
+int FT_ACCESS;
+int DT_ACCESS;
+
 
 
 
@@ -210,7 +222,6 @@ static void vmInit(systemArgs *args){
     args->arg4 = (void *)((long) -1);
     return;
   }
-
   //>>> Phase 3 - Call vmInitReal to initialize VM Subsystem
   int result = (int) (long)vmInitReal(mappings, pages, frames, pagers);
 
@@ -286,7 +297,6 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
 
   //>>> Phase 3 - Install Fault Handler
   USLOSS_IntVec[USLOSS_MMU_INT] = FaultHandler;
-
   //>>> Phase 4 - Initialize Page Tables (see documentation for more info)
   for(int i = 0; i < MAXPROC; i++){
 
@@ -295,12 +305,11 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
 
     // Create as many PTEs as there are numpages
     processes[i].pageTable = (PTE*) malloc(NUM_PAGES * sizeof(PTE));
-
     // Initialize the Page Table
-    for (int i = 0; i < NUM_PAGES; i++) {
-      processes[i].pageTable[i].state = UNUSED;
-      processes[i].pageTable[i].frame = -1;
-      processes[i].pageTable[i].diskBlock = -1;
+    for (int j = 0; j < NUM_PAGES; j++) {
+      processes[i].pageTable[j].state = UNUSED;
+      processes[i].pageTable[j].frame = -1;
+      processes[i].pageTable[j].diskBlock = -1;
     } // Ends malloc and initialization of Page Table
   } // Ends initialization of Process Table
 
@@ -337,11 +346,7 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
     DiskTable[i].pid  = -1; 
     DiskTable[i].page = -1;    
   }
-
-  //USLOSS_Console("NUM_SECTORS = %d\n", SECTOR_SIZE);
-  //USLOSS_Console("NUM_TRACKS  = %d\n", TRACK_SIZE);  
-  //USLOSS_Console("DISK_SIZE   = %d\n", DISK_SIZE);    
-
+ 
   //>>> Phase 10 - Zero out, then initialize vmStats structure
   memset((char *) &vmStats, 0, sizeof(VmStats));
   vmStats.pages          = pages;
@@ -349,7 +354,7 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
   vmStats.freeFrames     = frames;
   vmStats.switches       = 0;
   vmStats.faults         = 0;
-  vmStats.new            = 1;      // XTODO Placeholder - should be 0 (zero)  
+  vmStats.new            = 0;
   vmStats.pageIns        = 0;
   vmStats.pageOuts       = 0;
   vmStats.replaced       = 0;
@@ -394,6 +399,8 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
 |          which the 'synchronization' between the Fault Handler and the
 |          Pager Daemons was explained in the spec and documentation was 
 |          unclear, and worse - potentially misleading.
+|
+| Notes:   Page Faults will occur whenever the vmRegion is 'touched'.
 +---------------------------------------------------------------------*/
 static void FaultHandler(int  type , void *arg){
   
@@ -446,52 +453,96 @@ static void FaultHandler(int  type , void *arg){
  *----------------------------------------------------------------------
  */
 static int Pager(char *buf){
-  int status;
-  int frame;
-  int pid;
+  int getter = 0;
+  int targetFrame;
+  int targetPage;
+  int CLIENT;
+  int OLDGUY;
 
-  if(status == 0){;} // XTODO - TEMP, shuts up 'status declared but not used' GCC error for now
+  char rec[1];
 
-  //USLOSS_Console("%d\n", NUM_FRAMES);
 
-    while(1) {
-      // Prepare container for message
-      char buf[MAX_MESSAGE];
-      // Do receive on pagerBox  
-      MboxReceive(pagerBox, buf, MAX_MESSAGE);      
-      // convert string to int and get the pid of the requesting process
-      pid = atoi(buf);
-      //>>> If it gets -1, is VmDestroyReal killing it - do thusly...
-      if(pid == -2){quit(1);}
+  //enable interrupts
+  USLOSS_PsrSet(USLOSS_PsrGet() | USLOSS_PSR_CURRENT_INT);  
 
-      // find a free frame
-      // TODO put this whole thing into the Clock Algorithm
-      for(int i = 0; i<NUM_FRAMES ; i++){
-        if (FrameTable[i].isUsed == UNUSED){
-          frame = i;
-          break;
-        }
+  while(1) {
+
+    // Do receive on pagerBox
+    MboxReceive(pagerBox, rec, MAX_MESSAGE);
+
+    // Get the int value of the message
+    CLIENT = atoi(rec);
+
+    //>>> If it gets -2, is VmDestroyReal killing it - do thusly...
+    if(CLIENT == -2){quit(1);}
+
+    // THIS IS WHERE GETTING FRAME HAPPENS - KEEPING IT SIMPLE FOR NOW
+    for(int i = 0; i<NUM_FRAMES ; i++){
+      if (FrameTable[i].isUsed == UNUSED){
+        targetFrame = i;
+        break;
+      }
+    }
+    // CLOCK ALGORITHM CALL HERE
+
+
+
+    // Get the target page
+    targetPage = (int) (long)((faults[CLIENT].addr)-(vmRegion)) / USLOSS_MmuPageSize();
+
+      /* SCENARIOS TO HANDLE <<< INTUITION IS THAT THIS REFERS TO FINDINGS OF getFrame 
+
+        1) THE FRAME IS UNUSED
+        2) THE FRAME IS USED AND DIRTY
+        3) THE FRAME IS USED AND CLEAN
+
+      */
+
+    // IF THE FRAME IS UNUSED, ZERO IT OUT
+    if(FrameTable[targetFrame].isUsed == UNUSED){
+
+      // PREPARATION DONE TO THE FRAME
+      USLOSS_MmuMap(TAG, targetPage, targetFrame, USLOSS_MMU_PROT_RW);
+      memset(vmRegion+(targetPage*USLOSS_MmuPageSize()), 0, USLOSS_MmuPageSize());
+
+      // THE CLIENT REPORTS THAT THIS PAGE IS WRITTEN TO A DISK
+      if( processes[CLIENT].pageTable[targetPage].state == ONDISK){
+        vmStats.pageIns++; // A Page has been brought in from disk
+        char fromTheDisk[USLOSS_MmuPageSize() + 1];
+        int block = processes[CLIENT].pageTable[targetPage].diskBlock;
+        diskReadReal(1, block, 0, 8, fromTheDisk);
+        memcpy(vmRegion+(targetPage*USLOSS_MmuPageSize()), fromTheDisk, USLOSS_MmuPageSize());
+
+
+
       }
 
-      // CLOCK ALGORITHM CALL HERE
+      // THE CLIENT REPORTS NOTHING ON DISK FOR THIS PAGE
+      else{
+        USLOSS_MmuSetAccess( targetFrame,  0);
+        vmStats.new++;
+      }
 
-      // get the faultmsg associated with the pid
-      FaultMsg msg = faults[pid];
+      // PAGER MUST UNMAP SO PROCESS CAN IN SWITCH
+      USLOSS_MmuUnmap(TAG, targetPage);
 
-      // Get the page #
-      int page = (int) (long)((faults[pid].addr)-(vmRegion))/NUM_PAGES;
+      // UPDATE FRAME TABLE - THIS NEEDS MUTEX
+      FrameTable[targetFrame].isUsed       = ISUSED;
+      FrameTable[targetFrame].page         = targetPage;
+      FrameTable[targetFrame].owner        = CLIENT;
+      FrameTable[targetFrame].isDirty      = 0;
+      FrameTable[targetFrame].isReferenced = 0;
+    } // Ends Unused Frame Scenario
 
-      // update the page table for the process
-      processes[pid%MAXPROC].pageTable[page].state = INCORE;
-      processes[pid%MAXPROC].pageTable[page].frame = frame;
+    // Update Client process page table
+    processes[CLIENT%MAXPROC].pageTable[targetPage].state = INCORE;
+    processes[CLIENT%MAXPROC].pageTable[targetPage].frame = targetFrame;
 
-       // wake up the faulting process
-       MboxSend(faults[pid%MAXPROC].replyMbox, NULL, 0);
+    // wake up the faulting process
+    MboxSend(faults[CLIENT%MAXPROC].replyMbox, NULL, 0);       
 
-    }
-
-
-    return 0;
+  }
+  return 0; // So GCC won't complain
 } /* Pager */
 
 

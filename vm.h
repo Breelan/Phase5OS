@@ -20,10 +20,15 @@
 | > USUSED - the page is not used
 | > INCORE - the page is in in a frame (i.e. in 'core' memory)
 
+PTE Statuses via Homer:
+PAGEOUT - need frame for other purpose, so write it to disk
+PAGEIN - bring the page into the frame
+
+
 +---------------------------------------------------------------------*/
 #define UNUSED 500
-#define INCORE 501
-#define ONDISK 502
+#define INCORE 501 // RENAME TO PAGEINFRAME
+#define ONDISK 502 // RENAME TO PAGEOUTDISK
 #define ISUSED 503
 
 /*----------------------------------------------------------------------
