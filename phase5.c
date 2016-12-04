@@ -9,7 +9,7 @@
 +-----------------------------------------------------------------------
 |>>> Implementation Notes for Phase 5
 |      
-|/**********************************************************************
+|
 | > Preface:
 |
 |   I put lots of time and effort into this, so I want to show some of
@@ -17,7 +17,7 @@
 |
 |   This is also my penance for a poor delivery on Phase 4.
 |
-|/**********************************************************************
+|
 | > Bitwise Math Proofs for Clock/Pager MMU Access Set stuff:
 
  > C+U == 00 == 0
@@ -70,6 +70,7 @@ TTD Before turnin when everything works:
 // Will probably need these two at some point...
 #include <stdlib.h>
 #include <stdio.h>
+#include <providedPrototypes.h>
 
 /*----------------------------------------------------------------------
 |>>> These are needed to work with libpatrickphase4.a
@@ -495,8 +496,10 @@ static int Pager(char *buf){
   int getter;
   int targetFrame;
   int targetPage;
+  int blockToUse;
   int CLIENT;
   int OLDGUY;
+  int OLDGUYpage;
   int gotOne; // indicates Pager found a frame
   int WL_SEC; // AKA *W*hile *L*oop *Sec*urity - covers my ass in case of buggy while loop
 
@@ -558,6 +561,7 @@ static int Pager(char *buf){
         // But don't forget to tell gotOne this!
         gotOne = T;
         targetFrame = clockHand;
+
       }
 
       if(clockHand == NUM_FRAMES-1){clockHand = 0;}
@@ -573,59 +577,119 @@ static int Pager(char *buf){
     targetPage = (int) (long)((faults[CLIENT].addr)-(vmRegion)) / USLOSS_MmuPageSize();
 
     //##################################################################
-    //>>> PHASE 4 - HANDLE THE CURRENT FRAME OCCUPANT, IF NEEDED
+    //>>> PHASE 4 - HANDLE THE DIRTY FRAME SCENARIO
     //##################################################################
 
-    //if()
+    // Get the dirty bit, will determine if we need to write frame to disk
+    USLOSS_MmuGetAccess(targetFrame, &getter);
+
+    if( (getter&USLOSS_MMU_DIRTY) == USLOSS_MMU_DIRTY){
+
+      // Create the disk buffer
+      char buf [USLOSS_MmuPageSize()+1];
+      
+      // Get info on the current occupant of the frame
+      OLDGUY = FrameTable[targetFrame].owner;
+      OLDGUYpage = FrameTable[targetFrame].page;
+
+      // Map Pager to the frame, else MMU Interrupt will happen
+      USLOSS_MmuMap(TAG, 0, targetFrame, USLOSS_MMU_PROT_RW);
+
+      // Copy the page to the buffer (AND LOL Was going crazy until I saw Piazza Post # 428)
+      memcpy(buf, vmRegion, USLOSS_MmuPageSize());
+
+      // We're done with the memcpy - unmap ourselves
+      USLOSS_MmuUnmap(TAG, 0);
+
+      // Find an available disk block to use
+      for (blockToUse = 0; blockToUse < DISK_SIZE; blockToUse++){
+        if(DiskTable[blockToUse].pid == -1){
+          break;
+        }
+      }
+
+      DiskTable[blockToUse].pid = OLDGUY;
+
+      // Write to the disk. We'll use 8 sectors i.e 1 track blocks for now
+      diskWriteReal(1, blockToUse, 0,8, buf);
+
+      // Update the state for the OLDGUY whose frame is now on a disk
+      processes[OLDGUY].pageTable[OLDGUYpage].diskBlock = blockToUse;
+      processes[OLDGUY].pageTable[OLDGUYpage].state     = ONDISK;
+      processes[OLDGUY].pageTable[OLDGUYpage].frame     = -1;
+      // Update vmStats
+      vmStats.pageOuts++;
+      vmStats.freeDiskBlocks--;
+
+    } // Ends Frame-To-Disk Operation
+
+    //##################################################################
+    //>>> PHASE 4 - HANDLE THE PAGE SCENARIO
+    //##################################################################
+
+    USLOSS_MmuMap(TAG, targetPage, targetFrame, USLOSS_MMU_PROT_RW);
 
 
+    if( processes[CLIENT].pageTable[targetPage].state == ONDISK){
 
-    // IF THE FRAME IS UNUSED, ZERO IT OUT
-    if(FrameTable[targetFrame].isUsed == UNUSED){
+      // Get the block to use from the CLIENT
+      blockToUse = processes[CLIENT].pageTable[targetPage].diskBlock;
 
-      // PREPARATION DONE TO THE FRAME
-      USLOSS_MmuMap(TAG, targetPage, targetFrame, USLOSS_MMU_PROT_RW);
+      
+      // Read the block from the disk
+      diskReadReal(1, blockToUse, 0, 8, buf);
+
+
+      USLOSS_Console("diskBlock = %d\n", blockToUse);
+
+      // And copy into the frame
+      memcpy(vmRegion+(targetPage*USLOSS_MmuPageSize()), buf, USLOSS_MmuPageSize());
+
+      vmStats.pageIns++;
+    }
+
+    else{
+      vmStats.new++;
+
+      // Zero out the memory
       memset(vmRegion+(targetPage*USLOSS_MmuPageSize()), 0, USLOSS_MmuPageSize());
 
-      // THE CLIENT REPORTS THAT THIS PAGE IS WRITTEN TO A DISK
-      if( processes[CLIENT].pageTable[targetPage].state == ONDISK){
-        vmStats.pageIns++; // A Page has been brought in from disk
-        char fromTheDisk[USLOSS_MmuPageSize() + 1];
-        int block = processes[CLIENT].pageTable[targetPage].diskBlock;
-        diskReadReal(1, block, 0, 8, fromTheDisk);
-        memcpy(vmRegion+(targetPage*USLOSS_MmuPageSize()), fromTheDisk, USLOSS_MmuPageSize());
+      // Set access to clean and unreferenced
+      USLOSS_MmuSetAccess(targetPage,0);
+    }
 
+    // PAGER MUST UNMAP SO PROCESS CAN IN SWITCH
+    USLOSS_MmuUnmap(TAG, targetPage);
 
-
-      }
-
-      // THE CLIENT REPORTS NOTHING ON DISK FOR THIS PAGE
-      else{
-        USLOSS_MmuSetAccess( targetFrame,  0);
-        vmStats.new++;
-      }
-
-      // PAGER MUST UNMAP SO PROCESS CAN IN SWITCH
-      USLOSS_MmuUnmap(TAG, targetPage);
-
-      // UPDATE FRAME TABLE - THIS NEEDS MUTEX
-      FrameTable[targetFrame].isUsed       = ISUSED;
-      FrameTable[targetFrame].page         = targetPage;
-      FrameTable[targetFrame].owner        = CLIENT;
-      FrameTable[targetFrame].isDirty      = 0;
-      FrameTable[targetFrame].isReferenced = 0;
-    } // Ends Unused Frame Scenario
+    //##################################################################
+    //>>> PHASE 5 - UPDATE THE CLIENT PAGE TABLE AND FRAME TABLE
+    //##################################################################
 
     // Update Client process page table
     processes[CLIENT%MAXPROC].pageTable[targetPage].state = INCORE;
     processes[CLIENT%MAXPROC].pageTable[targetPage].frame = targetFrame;
 
-    // wake up the faulting process
-    MboxSend(faults[CLIENT%MAXPROC].replyMbox, NULL, 0);       
+    //XTODO - NEEDS MUTEX
 
-  }
+    USLOSS_MmuGetAccess(targetFrame, &getter);
+
+    if( (getter&USLOSS_MMU_DIRTY) == (USLOSS_MMU_DIRTY)) {FrameTable[targetFrame].isDirty=DIRTY;}
+    else                                                 {FrameTable[targetFrame].isDirty=CLEAN;}
+
+    if( (getter&USLOSS_MMU_REF) == (USLOSS_MMU_REF))     {FrameTable[targetFrame].isReferenced=ISREF;}
+    else                                                 {FrameTable[targetFrame].isReferenced=UNREF;}
+
+    FrameTable[targetFrame].isUsed       = ISUSED;
+    FrameTable[targetFrame].page         = targetPage;
+    FrameTable[targetFrame].owner        = CLIENT;
+
+    //##################################################################
+    //>>> DONE - WAKE UP CLIENT PROCESS
+    //##################################################################
+    MboxSend(faults[CLIENT%MAXPROC].replyMbox, NULL, 0);       
+  } // Ends Pager Loop
   return 0; // So GCC won't complain
-} /* Pager */
+} // Ends Process Pager
 
 
 /*----------------------------------------------------------------------
