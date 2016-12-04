@@ -15,20 +15,32 @@
 #define TAG 0
 
 /*----------------------------------------------------------------------
-|>>> Different States for a Page
+|>>> PAGE AND FRAME STATES
 +-----------------------------------------------------------------------
-| > USUSED - the page is not used
-| > INCORE - the page is in in a frame (i.e. in 'core' memory)
-
-PTE Statuses via Homer:
-PAGEOUT - need frame for other purpose, so write it to disk
-PAGEIN - bring the page into the frame
-
-
+| POSSIBLE STATES FOR A PAGE:
+|
+| > USUSED - The page is not used
+| > INCORE - aka PAGEIN  aka PAGEINFRAME - Page is in a frame (i.e. in 'core' memory)
+| > ONDISK - aka PAGEOUT aka PAGEOUTDISK - Page was on frame, but moved by Pager to Disk
+| > USED   - Redundant, as PAGEINFRAME->USED and PAGEOUTDISK->USED
++-----------------------------------------------------------------------
+| POSSIBLE STATES FOR A FRAME:
+|
+| > UNUSED - The frame is not used, is considered Clean and Unreferenced
+| > DIRTY  - Frame has been written to (good enough definition for this)
+| > CLEAN  - Frame is either zeroed out, or read from but not written to
+| > 
 +---------------------------------------------------------------------*/
+
+
+
 #define UNUSED 500
 #define INCORE 501 // RENAME TO PAGEINFRAME
 #define ONDISK 502 // RENAME TO PAGEOUTDISK
+
+
+
+
 #define ISUSED 503
 
 /*----------------------------------------------------------------------

@@ -1,5 +1,5 @@
 /*======================================================================
-|  USLOSS Project - Phase 5 : phase5.c
+|>>> USLOSS Project - Phase 5 : phase5.c
 +-----------------------------------------------------------------------
 |  Author:      Steven Eiselen | Breelan Lubers
 |  Language:    C utilizing USLOSS
@@ -7,16 +7,46 @@
 |  Instructor:  Patrick Homer
 |  Purpose:     Implements Phase 5
 +-----------------------------------------------------------------------
-| >>>>>>>>>>>>>>>>>>>> OPERATION TOTALITY UNISPHERE <<<<<<<<<<<<<<<<<<<<
+|>>> Implementation Notes for Phase 5
+|      
+|/**********************************************************************
+| > Preface:
 |
-| Domine Jesu Christe, Rex gloriae! Rex gloriae! Libera animas omniurn
-| fidelium defunctorum de poenis inferni, et de prof undo lacu: Libera 
-| cas de ore leonis, ne absorbeat eas tartarus, ne cadant in obscurum. 
-| Sed signifer sanctus Michael repraesentet eas in lucem sanctam, quam 
-| olim Abrahae promisisti et semini ejus. 
+|   I put lots of time and effort into this, so I want to show some of
+|   the notes taken along the way, just as I did with Phases 2 and 3.
 |
-| Sanctus! Sanctus! Sanctus! Dominus Deus Sabaoth! Pleni suni coeli et 
-| terra gloria tua. Osanna in excelsis!
+|   This is also my penance for a poor delivery on Phase 4.
+|
+|/**********************************************************************
+| > Bitwise Math Proofs for Clock/Pager MMU Access Set stuff:
+
+ > C+U == 00 == 0
+ > C+R == 01 == 1 <- is USLOSS_MMU_REF as it encompasses Reference Bit's ID
+ > D+U == 10 == 2 <- is USLOSS_MMU_DIRTY as it encompasses Dirty Bit's ID
+ > D+R == 11 == 3
+
+ Ergo...
+
+ > QUERY: IS REFERENCED? => (FULL BITS)&(USLOSS_MMU_REF)
+     o (C+R)&(C+R) == (01)&(01) == (01) == USLOSS_MMU_REF
+     o (D+R)&(C+R) == (11)&(01) == (01) == USLOSS_MMU_REF
+
+ > QUERY: IS DIRTY? => (FULL BITS)&(USLOSS_MMU_DIRTY)
+     o (D+U)&(D+U) == (10)&(10) == (10) == USLOSS_MMU_DIRTY
+     o (D+R)&(D+U) == (11)&(10) == (10) == USLOSS_MMU_DIRTY
+
+ > ACTION: SET UNREFERENCED => (FULL BITS)&(USLOSS_MMU_DIRTY)
+     o (C+R)&(D+U) == (01)&(10) == (00) == (C+U)
+     o (D+R)&(D+U) == (11)&(10) == (10) == (D+U)
+
+ > ACTION: SET CLEAN => (FULL BITS)&(USLOSS_MMU_REF)
+     o (D+U)&(C+R) == (10)&(01) == (00) == (C+U)
+     o (D+R)&(C+R) == (11)&(01) == (01) == (C+R)
+
+
+
+
+
 +-----------------------------------------------------------------------
 
 TTD Before turnin when everything works:
@@ -104,7 +134,13 @@ void           *VM_REGION;         // Where vmRegion starts
 DTE *          DiskTable;          // Current state of Disk 1
 FTE *          FrameTable;
 int            VM_INIT;            // Informs if VmInit has completed
-int            clockHand;
+int            clockHand = 0;
+int            PAGER_QUIT = -2;    // signals a pager to quit (XTODO: Should put in phase5.h)
+
+
+// Homemade Boolean ____________________________________________________
+#define T 1
+#define F 0
 
 // TEMP MUTEX
 int FT_ACCESS;
@@ -128,7 +164,7 @@ static void vmDestroy(systemArgs *sysargsPtr);
 static int  Pager(char *buf);
 void        *vmInitReal(int m, int p, int f, int pd);
 void        vmDestroyReal(void); 
-void        clockAlgo();
+int         getFrame();
 
 
 /*----------------------------------------------------------------------
@@ -449,15 +485,20 @@ static void FaultHandler(int  type , void *arg){
  *
  * Side effects:
  * None.
- *
+
+
+
+
  *----------------------------------------------------------------------
  */
 static int Pager(char *buf){
-  int getter = 0;
+  int getter;
   int targetFrame;
   int targetPage;
   int CLIENT;
   int OLDGUY;
+  int gotOne; // indicates Pager found a frame
+  int WL_SEC; // AKA *W*hile *L*oop *Sec*urity - covers my ass in case of buggy while loop
 
   char rec[1];
 
@@ -467,36 +508,77 @@ static int Pager(char *buf){
 
   while(1) {
 
-    // Do receive on pagerBox
+    //##################################################################
+    //>>> PHASE 1 - SET UP THE REQUEST, GET THE MESSAGE, QUIT IF KILLED
+    //##################################################################    
+
+    // Stuff we should reassign each new request operation
+    gotOne = F;
+    getter = 0;
+    WL_SEC = 0;
+
+    // Do receive on pagerBox - when we unblock, we get to work...
     MboxReceive(pagerBox, rec, MAX_MESSAGE);
 
     // Get the int value of the message
     CLIENT = atoi(rec);
 
-    //>>> If it gets -2, is VmDestroyReal killing it - do thusly...
-    if(CLIENT == -2){quit(1);}
+    // If CLIENT==PAGER_QUIT: it's from VmDestroyReal, so do it!
+    if(CLIENT == PAGER_QUIT){quit(1);}
 
-    // THIS IS WHERE GETTING FRAME HAPPENS - KEEPING IT SIMPLE FOR NOW
+    //##################################################################
+    //>>> PHASE 2 - GET TARGET FRAME A.K.A. CLOCK ALGO + 'HOMER'S TWIST'
+    //##################################################################
+
+    // Case 1 - Homer's Twist: FrameTable reports frame unused: use it!
     for(int i = 0; i<NUM_FRAMES ; i++){
       if (FrameTable[i].isUsed == UNUSED){
         targetFrame = i;
+        gotOne = T;
         break;
       }
-    }
-    // CLOCK ALGORITHM CALL HERE
+    } // Ends Scenario 1 (Homer's Twist)
+
+    // Case 2 and 3 - Clock Algorithm: Get an unreferenced frame
+    while(gotOne==F && WL_SEC < 1000){
+
+      // Get MMU Ref Bits for clockHand frame
+      USLOSS_MmuGetAccess(clockHand, &getter);
+
+      // If the bit is referenced
+      if( (getter&USLOSS_MMU_REF) == USLOSS_MMU_REF){
+        // Mask Dirty Bit ID over curent Bit to Unreference
+        getter = getter&USLOSS_MMU_DIRTY;
+        // And send the modified bits back to the MMU
+        USLOSS_MmuSetAccess(clockHand,getter);
+      } // Ends modifying a referenced frame to become unreferenced
+
+      // We've discovered an unreferenced frame - we're done!
+      else{
+        // But don't forget to tell gotOne this!
+        gotOne = T;
+        targetFrame = clockHand;
+      }
+
+      if(clockHand == NUM_FRAMES-1){clockHand = 0;}
+      else{clockHand++;}
+
+      WL_SEC++; // For Security Purposes
+    }if(WL_SEC==100){USLOSS_Console("\n\n>>>Alert! While Loop Security Fuse!\n\n");}
 
 
-
-    // Get the target page
+    //##################################################################
+    //>>> PHASE 3 - GET TARGET PAGE
+    //##################################################################
     targetPage = (int) (long)((faults[CLIENT].addr)-(vmRegion)) / USLOSS_MmuPageSize();
 
-      /* SCENARIOS TO HANDLE <<< INTUITION IS THAT THIS REFERS TO FINDINGS OF getFrame 
+    //##################################################################
+    //>>> PHASE 4 - HANDLE THE CURRENT FRAME OCCUPANT, IF NEEDED
+    //##################################################################
 
-        1) THE FRAME IS UNUSED
-        2) THE FRAME IS USED AND DIRTY
-        3) THE FRAME IS USED AND CLEAN
+    //if()
 
-      */
+
 
     // IF THE FRAME IS UNUSED, ZERO IT OUT
     if(FrameTable[targetFrame].isUsed == UNUSED){
@@ -544,8 +626,6 @@ static int Pager(char *buf){
   }
   return 0; // So GCC won't complain
 } /* Pager */
-
-
 
 
 /*----------------------------------------------------------------------
@@ -608,7 +688,7 @@ void vmDestroyReal(void){
   char mess[1]; // Used with sprintf to send integer value passed into message
 
   // Encode int value -1 into special message
-  sprintf(mess, "%d", -2);
+  sprintf(mess, "%d", PAGER_QUIT);
 
   // Kill the Pagers
   for (int i = 0; i < NUM_PAGERS; i++){
