@@ -522,7 +522,6 @@ static int Pager(char *buf){
 
     // Do receive on pagerBox - when we unblock, we get to work...
     MboxReceive(pagerBox, rec, MAX_MESSAGE);
-
     // Get the int value of the message
     CLIENT = atoi(rec);
 
@@ -550,8 +549,10 @@ static int Pager(char *buf){
 
       // If the bit is referenced
       if( (getter&USLOSS_MMU_REF) == USLOSS_MMU_REF){
+        
         // Mask Dirty Bit ID over curent Bit to Unreference
         getter = getter&USLOSS_MMU_DIRTY;
+
         // And send the modified bits back to the MMU
         USLOSS_MmuSetAccess(clockHand,getter);
       } // Ends modifying a referenced frame to become unreferenced
@@ -562,6 +563,14 @@ static int Pager(char *buf){
         gotOne = T;
         targetFrame = clockHand;
 
+        // if OLDGUY exists, update OLDGUY's PTE
+        if(FrameTable[targetFrame].owner > 0) {
+          int old = FrameTable[targetFrame].owner;
+          int oldPage = FrameTable[targetFrame].page;
+
+          processes[old].pageTable[oldPage].state = ISUSED;
+          processes[old].pageTable[oldPage].frame = -1;
+        }
       }
 
       if(clockHand == NUM_FRAMES-1){clockHand = 0;}
@@ -576,6 +585,11 @@ static int Pager(char *buf){
     //##################################################################
     targetPage = (int) (long)((faults[CLIENT].addr)-(vmRegion)) / USLOSS_MmuPageSize();
 
+    // increment new if this PTE has never been used before
+    if(processes[CLIENT].pageTable[targetPage].state == UNUSED) {
+      vmStats.new++;
+    }
+
     //##################################################################
     //>>> PHASE 4 - HANDLE THE DIRTY FRAME SCENARIO
     //##################################################################
@@ -585,41 +599,49 @@ static int Pager(char *buf){
 
     if( (getter&USLOSS_MMU_DIRTY) == USLOSS_MMU_DIRTY){
 
-      // Create the disk buffer
-      char buf [USLOSS_MmuPageSize()+1];
-      
-      // Get info on the current occupant of the frame
-      OLDGUY = FrameTable[targetFrame].owner;
-      OLDGUYpage = FrameTable[targetFrame].page;
+      // FIRST check if you have to write to disk - or is frame full of 0's?
 
       // Map Pager to the frame, else MMU Interrupt will happen
       USLOSS_MmuMap(TAG, 0, targetFrame, USLOSS_MMU_PROT_RW);
 
-      // Copy the page to the buffer (AND LOL Was going crazy until I saw Piazza Post # 428)
-      memcpy(buf, vmRegion, USLOSS_MmuPageSize());
+      // get the first char of the frame
+      int buf = *(int *) (vmRegion);
 
-      // We're done with the memcpy - unmap ourselves
-      USLOSS_MmuUnmap(TAG, 0);
+      // only write to disk if first char isn't 0
+      if(buf != 0){
+        // Create the disk buffer
+        char buf [USLOSS_MmuPageSize()+1];
+        
+        // Get info on the current occupant of the frame
+        OLDGUY = FrameTable[targetFrame].owner;
+        OLDGUYpage = FrameTable[targetFrame].page;
 
-      // Find an available disk block to use
-      for (blockToUse = 0; blockToUse < DISK_SIZE; blockToUse++){
-        if(DiskTable[blockToUse].pid == -1){
-          break;
+        // Copy the page to the buffer (AND LOL Was going crazy until I saw Piazza Post # 428)
+        memcpy(buf, vmRegion, USLOSS_MmuPageSize());
+
+        // Find an available disk block to use
+        for (blockToUse = 0; blockToUse < DISK_SIZE; blockToUse++){
+          if(DiskTable[blockToUse].pid == -1){
+            break;
+          }
         }
+
+        DiskTable[blockToUse].pid = OLDGUY;
+        
+        // Write to the disk. We'll use 8 sectors i.e 1 track blocks for now
+        diskWriteReal(1, blockToUse, 0,8, buf);
+        
+        // Update the state for the OLDGUY whose frame is now on a disk
+        processes[OLDGUY].pageTable[OLDGUYpage].diskBlock = blockToUse;
+        processes[OLDGUY].pageTable[OLDGUYpage].state     = ONDISK;
+        processes[OLDGUY].pageTable[OLDGUYpage].frame     = -1;
+        // Update vmStats
+        vmStats.pageOuts++;
+        vmStats.freeDiskBlocks--;
       }
 
-      DiskTable[blockToUse].pid = OLDGUY;
-
-      // Write to the disk. We'll use 8 sectors i.e 1 track blocks for now
-      diskWriteReal(1, blockToUse, 0,8, buf);
-
-      // Update the state for the OLDGUY whose frame is now on a disk
-      processes[OLDGUY].pageTable[OLDGUYpage].diskBlock = blockToUse;
-      processes[OLDGUY].pageTable[OLDGUYpage].state     = ONDISK;
-      processes[OLDGUY].pageTable[OLDGUYpage].frame     = -1;
-      // Update vmStats
-      vmStats.pageOuts++;
-      vmStats.freeDiskBlocks--;
+      // We're done with the frame - unmap ourselves
+      USLOSS_MmuUnmap(TAG, 0);
 
     } // Ends Frame-To-Disk Operation
 
@@ -629,16 +651,15 @@ static int Pager(char *buf){
 
     USLOSS_MmuMap(TAG, targetPage, targetFrame, USLOSS_MMU_PROT_RW);
 
-
     if( processes[CLIENT].pageTable[targetPage].state == ONDISK){
 
       // Get the block to use from the CLIENT
       blockToUse = processes[CLIENT].pageTable[targetPage].diskBlock;
 
+      char buf [USLOSS_MmuPageSize()];
       
       // Read the block from the disk
       diskReadReal(1, blockToUse, 0, 8, buf);
-
 
       USLOSS_Console("diskBlock = %d\n", blockToUse);
 
@@ -649,10 +670,11 @@ static int Pager(char *buf){
     }
 
     else{
-      vmStats.new++;
+
+      // vmStats.new++;
 
       // Zero out the memory
-      memset(vmRegion+(targetPage*USLOSS_MmuPageSize()), 0, USLOSS_MmuPageSize());
+      memset(vmRegion+(targetPage*USLOSS_MmuPageSize()), NULL, USLOSS_MmuPageSize());
 
       // Set access to clean and unreferenced
       USLOSS_MmuSetAccess(targetPage,0);

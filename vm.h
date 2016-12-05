@@ -41,7 +41,7 @@
 
 
 
-#define ISUSED 503
+#define ISUSED 503 // keep this so you know if page has been ref'd before
 
 /*----------------------------------------------------------------------
 |>>> Different States for a Frame
