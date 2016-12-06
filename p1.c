@@ -61,12 +61,13 @@ void p1_quit(int pid){
     for (int i = 0; i < NUM_FRAMES; i++){
       if(FrameTable[i].owner==pid){
         FrameTable[i].owner=-1; // XTODO - MUTEX NEEDED
+        FrameTable[i].isUsed = UNUSED;
         USLOSS_MmuUnmap(0, i); // ADDED VIA HOMER 12/5
       }
     }
 
     // Free the Page Table
-    free(processes[pid].pageTable);
+    //free(processes[pid].pageTable);
   }
 } // Ends Function p1_quit
 
@@ -91,11 +92,11 @@ void p1_switch(int old, int new){
       // NEED INCORE? BECAUSE IF ON DISK - WE WONT CARE ANYWAY
       if (processes[new%MAXPROC].pageTable[i].state == INCORE) {
 
-      int frame = processes[new%MAXPROC].pageTable[i].frame;
+        int frame = processes[new%MAXPROC].pageTable[i].frame;
 
-      // Do a USLOSS_MmuMap call
-      USLOSS_MmuMap(TAG, i, frame, USLOSS_MMU_PROT_RW);
-      
+        // Do a USLOSS_MmuMap call
+        USLOSS_MmuMap(TAG, i, frame, USLOSS_MMU_PROT_RW);
+        
       }
 
     } // Ends Unmapping of Old Process    

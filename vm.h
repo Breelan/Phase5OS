@@ -93,6 +93,7 @@ typedef struct FTE{
   int page;
   int isDirty;      // Examine this bit to see if PTE is dirty or not
   int isReferenced; // ??? needed? or is this the same as state?
+  int lockedByPager;
 }FTE;
 
 
