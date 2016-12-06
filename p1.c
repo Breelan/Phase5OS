@@ -14,6 +14,10 @@ extern int NUM_PAGES;
 extern int NUM_FRAMES;
 extern Process processes[MAXPROC];
 extern FTE FrameTable[];
+extern DTE DiskTable[];
+
+// IN QUIT, UNMAP WHATEVER WE OWNED IN THE FRAME
+// IN SWITCH UNMAP ONLY AS NECESSARY
 
 
 
@@ -33,6 +37,9 @@ void p1_fork(int pid){
 } // Ends Function p1_fork
 
 
+
+
+
 // Will need additional steps once DiskTable and FrameTable have been created
 // When a Proces Quits:
 //Any of its frame table entries need to indicate that there is now no owner
@@ -43,10 +50,10 @@ void p1_quit(int pid){
   if(VM_INIT){
 
     // Inform Disk Table that all disk blocks owned by this process can be used
-    for (int i = 0; i < NUM_PAGES; i++){
+    for (int i = 0; i < 32; i++){
       if(processes[pid%MAXPROC].pageTable[i].diskBlock != -1){
-        // DiskTable[aBlock].owned == 0;
-        vmStats.freeDiskBlocks++;
+        DiskTable[i].pid  = -1;
+        DiskTable[i].page = -1;
       }
     }
 
@@ -54,6 +61,7 @@ void p1_quit(int pid){
     for (int i = 0; i < NUM_FRAMES; i++){
       if(FrameTable[i].owner==pid){
         FrameTable[i].owner=-1; // XTODO - MUTEX NEEDED
+        USLOSS_MmuUnmap(0, i); // ADDED VIA HOMER 12/5
       }
     }
 
@@ -64,28 +72,30 @@ void p1_quit(int pid){
 
 // Needs a little more work...
 void p1_switch(int old, int new){
-  if(DEBUG==1){USLOSS_Console("In Function p1_switch\n");}
+  if(DEBUG==1){USLOSS_Console("Switching from %d to %d\n", old, new);}
   // Per normal - execute only if VM_INIT has occured
   if(VM_INIT==1){
 
     // Perform an unmap of the old Process
     for (int i = 0; i < NUM_PAGES; i++) {
 
-      USLOSS_MmuUnmap(0, i);
-
+      // ADDED THIS IN VIA HOMER 12/5
+      if (processes[old%MAXPROC].pageTable[i].state == INCORE) {
+        USLOSS_MmuUnmap(0, i);
+      }
     } // Ends Unmapping of Old Process
 
     // Perform a map of the new Process
     for (int i = 0; i < NUM_PAGES; i++) {
 
-      // If new process i'th page is in a frame
-      for (int i = 0; i < NUM_PAGES; i++) {
-        if (processes[new%MAXPROC].pageTable[i].state == INCORE) {
+      // NEED INCORE? BECAUSE IF ON DISK - WE WONT CARE ANYWAY
+      if (processes[new%MAXPROC].pageTable[i].state == INCORE) {
 
-          int frame = processes[new%MAXPROC].pageTable[i].frame;
-          // Do a USLOSS_MmuMap call
-          USLOSS_MmuMap(TAG, i, frame, USLOSS_MMU_PROT_RW);
-        }
+      int frame = processes[new%MAXPROC].pageTable[i].frame;
+
+      // Do a USLOSS_MmuMap call
+      USLOSS_MmuMap(TAG, i, frame, USLOSS_MMU_PROT_RW);
+      
       }
 
     } // Ends Unmapping of Old Process    
