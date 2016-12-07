@@ -130,6 +130,7 @@ int            SECTOR_SIZE;        // Used for vmInitReal
 int            TRACK_SIZE;         // Used for vmInitReal
 int            DISK_SIZE;          // Used for vmInitReal
 void           *VM_REGION;         // Where vmRegion starts
+int            START_PID;          // pid that initialized the vm region
 
 // Misc. / 'In a Rush' Added ___________________________________________
 DTE *          DiskTable;          // Current state of Disk 1
@@ -340,7 +341,7 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
     // We just thought this might actually refer to how many pages the process is using
     processes[i].numPages = 0;
 
-    // Create as many PTEs as there are numpages
+    // Create as many PTEs as there are NUM_PAGES
     processes[i].pageTable = (PTE*) malloc(NUM_PAGES * sizeof(PTE));
     // Initialize the Page Table
     for (int j = 0; j < NUM_PAGES; j++) {
@@ -375,8 +376,10 @@ void * vmInitReal(int mappings, int pages, int frames, int pagers){
   for (i = 0; i < NUM_PAGERS; i++) {
     sprintf(buf, "%d", i); // Why not tell the pager which one it is?
     pagerID[i] = fork1("PagerDaemon", Pager, buf, USLOSS_MIN_STACK, PAGER_PRIORITY);
-  } // Borrowed from Dr. Homer's Phase 4 skeleton code
 
+    // set START_PID to pid of last pager created
+    START_PID = pagerID[i];
+  } // Borrowed from Dr. Homer's Phase 4 skeleton code
 
   //>>> Phase 9 - Allocate and initialize DiskTable
   DiskTable = (DTE*) malloc(DISK_SIZE * sizeof(DTE));
@@ -458,6 +461,7 @@ static void FaultHandler(int  type , void *arg){
    
   //>>> Phase 3 - Send the Message, PID as the key
   char buf[MAX_MESSAGE];
+
   sprintf(buf, "%d", pid); // convert int to string
   MboxSend(pagerBox, buf, sizeof(int));
 
@@ -504,9 +508,7 @@ static int Pager(char *buf){
   int gotOne; // indicates Pager found a frame
   int WL_SEC; // AKA *W*hile *L*oop *Sec*urity - covers my ass in case of buggy while loop
 
-  char rec[1];
-
-  int opIter = 1;
+  char rec[sizeof(int)];
 
 
   //enable interrupts
@@ -586,16 +588,10 @@ static int Pager(char *buf){
       processes[OLDGUY].pageTable[OLDGUYpage].state = FROZEN;
     }
 
-
-
-
     //##################################################################
     //>>> PHASE 3 - GET TARGET PAGE
     //##################################################################
     targetPage = (int) (long)((faults[CLIENT].addr)-(vmRegion)) / USLOSS_MmuPageSize();
-
-
-
 
     // increment new if this PTE has never been used before
     if(processes[CLIENT].pageTable[targetPage].state == UNUSED) {
@@ -612,48 +608,58 @@ static int Pager(char *buf){
 
     if( (getter&USLOSS_MMU_DIRTY) == USLOSS_MMU_DIRTY){
 
-
       // My Page Table already has a disk block for this page - simple overwrite?
       if(processes[OLDGUY].pageTable[OLDGUYpage].diskBlock != -1){
-
+  
         USLOSS_MmuMap(TAG, OLDGUYpage, targetFrame, USLOSS_MMU_PROT_RW);
+  
         char buf [USLOSS_MmuPageSize()];
+
         memcpy(buf, vmRegion+(OLDGUYpage*USLOSS_MmuPageSize()), USLOSS_MmuPageSize());
+
+        // Update the state for the OLDGUY whose frame is now on a disk - do right away!
+        processes[OLDGUY].pageTable[OLDGUYpage].state     = ONDISK;
+        processes[OLDGUY].pageTable[OLDGUYpage].frame     = -1;
+
         diskWriteReal(1, processes[OLDGUY].pageTable[OLDGUYpage].diskBlock, 0,8, buf);
 
+        USLOSS_MmuUnmap(TAG, OLDGUYpage);
 
       } else{
 
-
         // Map Pager to the frame, else MMU Interrupt will happen
         USLOSS_MmuMap(TAG, OLDGUYpage, targetFrame, USLOSS_MMU_PROT_RW);
+        
         char buf [USLOSS_MmuPageSize()];
+
         memcpy(buf, vmRegion+(OLDGUYpage*USLOSS_MmuPageSize()), USLOSS_MmuPageSize());
 
+        // We're done with the frame - unmap ourselves
+        USLOSS_MmuUnmap(TAG, OLDGUYpage);
 
         // Find an available disk block to use
         for (blockToUse = 0; blockToUse < DISK_SIZE; blockToUse++){
-          if(DiskTable[blockToUse].pid == -1){break;}}
+          if(DiskTable[blockToUse].pid == -1){break;}
+        }
 
         DiskTable[blockToUse].pid = OLDGUY;
         DiskTable[blockToUse].page = OLDGUYpage;
-        // Write to the disk. We'll use 8 sectors i.e 1 track blocks for now
-        diskWriteReal(1, blockToUse, 0,8, buf);
-        
-        // Update the state for the OLDGUY whose frame is now on a disk
+
+        // Update the state for the OLDGUY whose frame is now on a disk - do right away!
         processes[OLDGUY].pageTable[OLDGUYpage].diskBlock = blockToUse;
         processes[OLDGUY].pageTable[OLDGUYpage].state     = ONDISK;
         processes[OLDGUY].pageTable[OLDGUYpage].frame     = -1;
-        // Update vmStats
+
+
+
+        // Write to the disk. We'll use 8 sectors i.e 1 track blocks for now
+        diskWriteReal(1, blockToUse, 0,8, buf);
 
         vmStats.freeDiskBlocks--;
 
       }
 
       vmStats.pageOuts++;
-
-      // We're done with the frame - unmap ourselves
-      USLOSS_MmuUnmap(TAG, OLDGUYpage);
 
     } // Ends Frame-To-Disk Operation
 
@@ -668,12 +674,7 @@ static int Pager(char *buf){
     USLOSS_MmuMap(TAG, targetPage, targetFrame, USLOSS_MMU_PROT_RW);
 
 
-    //if(FrameTable[targetFrame].isUsed == UNUSED){USLOSS_Console("\n\nYolo\n\n");}
-
-
     if( processes[CLIENT].pageTable[targetPage].state == ONDISK){
-
-
 
       // Get the block to use from the CLIENT
       blockToUse = processes[CLIENT].pageTable[targetPage].diskBlock;
@@ -687,9 +688,8 @@ static int Pager(char *buf){
       memcpy(vmRegion+(targetPage*USLOSS_MmuPageSize()), buf, USLOSS_MmuPageSize());
 
 
-
-  
-      DiskTable[blockToUse].pid = -1;
+      // what are we doing here? - TAKING OUT FOR NOW
+      // DiskTable[blockToUse].pid = -1;
 
 
       //vmStats.freeDiskBlocks++;
@@ -698,13 +698,9 @@ static int Pager(char *buf){
 
     else{
     
-      // vmStats.new++;
       // Zero out the memory
-      memset(vmRegion+(targetPage*USLOSS_MmuPageSize()), 0, USLOSS_MmuPageSize());
+      memset(VM_REGION +(targetPage*USLOSS_MmuPageSize()), 0, USLOSS_MmuPageSize());
     }
-
-
-
 
     // RESET MMU ACCESS BITS TO ZERO
     USLOSS_MmuSetAccess(targetFrame,0);
@@ -717,7 +713,7 @@ static int Pager(char *buf){
     //>>> PHASE 5 - UPDATE THE CLIENT PAGE TABLE AND FRAME TABLE
     //##################################################################
 
-    // Update Client process page table
+    // // Update Client process page table
     processes[CLIENT%MAXPROC].pageTable[targetPage].state = INCORE;
     processes[CLIENT%MAXPROC].pageTable[targetPage].frame = targetFrame;
 
@@ -798,37 +794,34 @@ static void vmDestroy(systemArgs *args){
 void vmDestroyReal(void){
   CheckMode(); // Are we in Kernel Mode?
 
-  VM_INIT = 0;      // We no longer have a MMU/VM Subsystem
+  if(VM_INIT == 1) {
 
-  int status;   // Used to make join call happy because it needs int pointer
-  char mess[1]; // Used with sprintf to send integer value passed into message
+    VM_INIT = 0;      // We no longer have a MMU/VM Subsystem
 
-  // Encode int value -1 into special message
-  sprintf(mess, "%d", PAGER_QUIT);
+    int status;   // Used to make join call happy because it needs int pointer
+    char mess[4]; // Used with sprintf to send integer value passed into message
 
-  // Kill the Pagers
-  for (int i = 0; i < NUM_PAGERS; i++){
-    MboxSend(pagerBox, mess, sizeof(int));
-    join(&status);
+    // Encode int value -1 into special message
+    sprintf(mess, "%d", PAGER_QUIT);
+
+    // Kill the Pagers
+    for (int i = 0; i < NUM_PAGERS; i++){
+      MboxSend(pagerBox, mess, sizeof(int));
+      join(&status);
+    }
+
+    PrintStats(); // Might not be what Homer did   
+
+    // Free Stuff in the exact reverse order it was malloc'd
+    free(DiskTable);
+    free(FrameTable);
+
+    for(int i = 0; i < MAXPROC; i++){
+      free(processes[i].pageTable); 
+    } // Ends freeing of Process Table
+
+    USLOSS_MmuDone(); // Make it official...call USLOSS_MmuDone
   }
-
-  PrintStats(); // Might not be what Homer did
-
-  // Free Stuff...
-  free(FrameTable);
-
-  //free(DiskTable);
-
-
-  
-
-
-
-  for(int i = 0; i < MAXPROC; i++){
-    free(processes[i].pageTable); 
-  } // Ends initialization of Process Table
-
-  USLOSS_MmuDone(); // Make it official...call USLOSS_MmuDone
 } // Ends Function vmDestroyReal
 
 /*----------------------------------------------------------------------

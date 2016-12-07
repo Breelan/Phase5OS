@@ -13,8 +13,9 @@ extern int VM_INIT;
 extern int NUM_PAGES;
 extern int NUM_FRAMES;
 extern Process processes[MAXPROC];
-extern FTE FrameTable[];
-extern DTE DiskTable[];
+extern FTE *FrameTable;
+extern DTE *DiskTable;
+extern int START_PID;
 
 // IN QUIT, UNMAP WHATEVER WE OWNED IN THE FRAME
 // IN SWITCH UNMAP ONLY AS NECESSARY
@@ -28,11 +29,12 @@ void p1_fork(int pid){
   // check VM_INIT - if VM System initialized, (re-)initialize page table
   if (VM_INIT) {
     // Re-initialize the Page Table
-    for (int i = 0; i < NUM_PAGES; i++) {
-      processes[pid].pageTable[i].state = UNUSED;
-      processes[pid].pageTable[i].frame = -1;
-      processes[pid].pageTable[i].diskBlock = -1;
-    }
+    // TODO check if this is necessary
+    // for (int i = 0; i < NUM_PAGES; i++) {
+    //   processes[pid].pageTable[i].state = UNUSED;
+    //   processes[pid].pageTable[i].frame = -1;
+    //   processes[pid].pageTable[i].diskBlock = -1;
+    // }
   }
 } // Ends Function p1_fork
 
@@ -50,10 +52,10 @@ void p1_quit(int pid){
   if(VM_INIT){
 
     // Inform Disk Table that all disk blocks owned by this process can be used
-    for (int i = 0; i < 32; i++){
+    for (int i = 0; i < NUM_PAGES; i++){
       if(processes[pid%MAXPROC].pageTable[i].diskBlock != -1){
-        DiskTable[i].pid  = -1;
-        DiskTable[i].page = -1;
+        DiskTable[processes[pid%MAXPROC].pageTable[i].diskBlock].pid  = -1;
+        DiskTable[processes[pid%MAXPROC].pageTable[i].diskBlock].page = -1;
       }
     }
 
@@ -65,41 +67,43 @@ void p1_quit(int pid){
         USLOSS_MmuUnmap(0, i); // ADDED VIA HOMER 12/5
       }
     }
-
-    // Free the Page Table
-    //free(processes[pid].pageTable);
   }
 } // Ends Function p1_quit
 
 // Needs a little more work...
 void p1_switch(int old, int new){
   if(DEBUG==1){USLOSS_Console("Switching from %d to %d\n", old, new);}
+
   // Per normal - execute only if VM_INIT has occured
   if(VM_INIT==1){
 
-    // Perform an unmap of the old Process
-    for (int i = 0; i < NUM_PAGES; i++) {
+    // only unmap old if it has a page table
+    if(old > START_PID) {
+      // Perform an unmap of the old Process
+      for (int i = 0; i < NUM_PAGES; i++) {
+        // ADDED THIS IN VIA HOMER 12/5
+        // TODO check validity of addition of FROZEN
+        if (processes[old%MAXPROC].pageTable[i].state == INCORE || processes[old%MAXPROC].pageTable[i].state == FROZEN) {
+          USLOSS_MmuUnmap(0, i);
+        }
+      } // Ends Unmapping of Old Process
+    }
 
-      // ADDED THIS IN VIA HOMER 12/5
-      if (processes[old%MAXPROC].pageTable[i].state == INCORE) {
-        USLOSS_MmuUnmap(0, i);
-      }
-    } // Ends Unmapping of Old Process
+    if (new > START_PID) {
+      // Perform a map of the new Process
+      for (int i = 0; i < NUM_PAGES; i++) {
 
-    // Perform a map of the new Process
-    for (int i = 0; i < NUM_PAGES; i++) {
+        // NEED INCORE? BECAUSE IF ON DISK - WE WONT CARE ANYWAY
+        if (processes[new%MAXPROC].pageTable[i].state == INCORE) {
 
-      // NEED INCORE? BECAUSE IF ON DISK - WE WONT CARE ANYWAY
-      if (processes[new%MAXPROC].pageTable[i].state == INCORE) {
+          int frame = processes[new%MAXPROC].pageTable[i].frame;
 
-        int frame = processes[new%MAXPROC].pageTable[i].frame;
+          // Do a USLOSS_MmuMap call
+          USLOSS_MmuMap(TAG, i, frame, USLOSS_MMU_PROT_RW);          
+        }
 
-        // Do a USLOSS_MmuMap call
-        USLOSS_MmuMap(TAG, i, frame, USLOSS_MMU_PROT_RW);
-        
-      }
-
-    } // Ends Unmapping of Old Process    
+      } // Ends Unmapping of Old Process  
+    }  
     vmStats.switches++;
   } // Ends VM_INIT==TRUE conditional implementation
   // Inform VM Stats that a context switch has occured
